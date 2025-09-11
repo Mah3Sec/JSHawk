@@ -54,7 +54,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/jshawk.git
+git clone https://github.com/Mah3Sec/JSHawk.git
 cd jshawk
 
 # Make executable
