@@ -1,810 +1,476 @@
-#!/bin/bash
+def analyze_js_file(self, js_url):
+        """Analyze a single JavaScript file for secrets"""
+        try:
+            response = self.session.get(js_url, timeout=self.timeout)
+            if response.status_code == 200:
+                content = response.text
+                secrets = self.extract_secrets(content, js_url)
+                endpoints = self.extract_endpoints(content, js_url)
+                return secrets, endpoints
+        except Exception as e:
+            print(f"{Fore.RED}[ERROR]{Style.RESET_ALL} Failed to analyze {js_url}: {e}")
+        return [], []
 
-# JSHawk v1.0 - Advanced JavaScript Security Scanner
-# Context-Aware Credential Detection with Custom Regex Support
-# Author: Security Research Team
-# GitHub: https://github.com/yourusername/jshawk
+    def analyze_source_map(self, map_url):
+        """Analyze source map files for secrets"""
+        try:
+            if '#inline' in map_url:
+                # Handle inline source maps
+                js_url = map_url.replace('#inline', '')
+                js_response = self.session.get(js_url, timeout=self.timeout)
+                if js_response.status_code == 200:
+                    # Extract inline source map
+                    content = js_response.text
+                    inline_pattern = r'//# sourceMappingURL=data:application/json;(?:charset=utf-8;)?base64,([A-Za-z0-9+/=]+)'
+                    matches = re.findall(inline_pattern, content)
+                    if matches:
+                        import base64
+                        decoded = base64.b64decode(matches[0]).decode('utf-8')
+                        return self.parse_source_map_content(decoded, map_url)
+            else:
+                # External source map
+                response = self.session.get(map_url, timeout=self.timeout)
+                if response.status_code == 200:
+                    return self.parse_source_map_content(response.text, map_url)
+        except Exception as e:
+            print(f"{Fore.RED}[ERROR]{Style.RESET_ALL} Failed to analyze source map {map_url}: {e}")
+        return [], []
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
-
-# Configuration
-MAIN_RESULTS_DIR="jshawk_results"
-CONFIG_DIR="$HOME/.jshawk"
-CUSTOM_REGEX_FILE="$CONFIG_DIR/custom_patterns.txt"
-USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-
-# Create configuration directory
-mkdir -p "$CONFIG_DIR"
-
-show_banner() {
-    echo -e "${CYAN}${BOLD}"
-    echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║                    JSHawk v1.0                              ║"
-    echo "║           Advanced JavaScript Security Scanner              ║"
-    echo "║        Context-Aware Credential Detection Tool             ║"
-    echo "╚══════════════════════════════════════════════════════════════╝"
-    echo -e "${NC}"
-    echo -e "${YELLOW}🦅 Hunt for secrets in JavaScript files with precision${NC}"
-    echo ""
-}
-
-show_help() {
-    echo -e "${CYAN}Usage:${NC}"
-    echo "  $0 <domain_or_url> [options]"
-    echo ""
-    echo -e "${CYAN}Options:${NC}"
-    echo "  -s, --subdomains <file>    Use subdomain list from file"
-    echo "  -c, --custom-regex         Add custom regex patterns interactively"
-    echo "  -l, --list-patterns        List all available detection patterns"
-    echo "  -o, --output <dir>         Custom output directory (default: jshawk_results)"
-    echo "  -t, --threads <num>        Number of concurrent downloads (default: 10)"
-    echo "  -v, --verbose              Enable verbose output"
-    echo "  -h, --help                 Show this help message"
-    echo ""
-    echo -e "${CYAN}Examples:${NC}"
-    echo "  $0 example.com"
-    echo "  $0 https://example.com -s subdomains.txt"
-    echo "  $0 example.com --custom-regex"
-    echo "  $0 example.com -o my_scan_results -v"
-    echo ""
-    echo -e "${CYAN}Custom Regex Format:${NC}"
-    echo "  Add patterns to ~/.jshawk/custom_patterns.txt"
-    echo "  Format: PATTERN_NAME|regex_pattern|description"
-    echo "  Example: CUSTOM_API|secret_key_[a-zA-Z0-9]{32}|Custom API Key Pattern"
-}
-
-list_patterns() {
-    echo -e "${CYAN}${BOLD}Built-in Detection Patterns:${NC}"
-    echo ""
-    echo -e "${GREEN}Cloud & Infrastructure:${NC}"
-    echo "  • AWS Access Keys (AKIA pattern)"
-    echo "  • AWS Secret Keys (40-char base64)"
-    echo "  • Google API Keys (AIza pattern)"
-    echo "  • Azure Storage Keys"
-    echo "  • Firebase URLs"
-    echo ""
-    echo -e "${GREEN}Version Control & CI/CD:${NC}"
-    echo "  • GitHub Personal Access Tokens"
-    echo "  • GitLab Tokens"
-    echo "  • Jenkins API Tokens"
-    echo ""
-    echo -e "${GREEN}Communication & Payment:${NC}"
-    echo "  • Slack Bot Tokens"
-    echo "  • Stripe Live Keys"
-    echo "  • SendGrid API Keys"
-    echo "  • Twilio Account SID/Auth Token"
-    echo ""
-    echo -e "${GREEN}Database & Generic:${NC}"
-    echo "  • Database Connection Strings"
-    echo "  • JWT Secrets"
-    echo "  • Generic API Keys"
-    echo "  • Private SSH/TLS Keys"
-    echo ""
-    if [ -f "$CUSTOM_REGEX_FILE" ]; then
-        echo -e "${GREEN}Custom Patterns:${NC}"
-        while IFS='|' read -r name pattern desc; do
-            echo "  • $name: $desc"
-        done < "$CUSTOM_REGEX_FILE"
-    fi
-}
-
-setup_custom_regex() {
-    echo -e "${YELLOW}Custom Regex Pattern Setup${NC}"
-    echo "Add your custom patterns for specific credential detection"
-    echo ""
-    
-    touch "$CUSTOM_REGEX_FILE"
-    
-    while true; do
-        echo -e "${CYAN}Enter pattern details (or 'done' to finish):${NC}"
-        read -p "Pattern Name: " pattern_name
-        
-        if [ "$pattern_name" = "done" ]; then
-            break
-        fi
-        
-        read -p "Regex Pattern: " regex_pattern
-        read -p "Description: " description
-        
-        # Validate regex
-        if echo "test" | grep -qE "$regex_pattern" 2>/dev/null || true; then
-            echo "$pattern_name|$regex_pattern|$description" >> "$CUSTOM_REGEX_FILE"
-            echo -e "${GREEN}✓ Added pattern: $pattern_name${NC}"
-        else
-            echo -e "${RED}✗ Invalid regex pattern, skipping${NC}"
-        fi
-        echo ""
-    done
-    
-    echo -e "${GREEN}Custom patterns saved to: $CUSTOM_REGEX_FILE${NC}"
-}
-
-# Parse command line arguments
-parse_args() {
-    DOMAIN=""
-    SUBDOMAIN_FILE=""
-    CUSTOM_OUTPUT=""
-    THREADS=10
-    VERBOSE=false
-    
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            -s|--subdomains)
-                SUBDOMAIN_FILE="$2"
-                shift 2
-                ;;
-            -c|--custom-regex)
-                setup_custom_regex
-                exit 0
-                ;;
-            -l|--list-patterns)
-                list_patterns
-                exit 0
-                ;;
-            -o|--output)
-                CUSTOM_OUTPUT="$2"
-                shift 2
-                ;;
-            -t|--threads)
-                THREADS="$2"
-                shift 2
-                ;;
-            -v|--verbose)
-                VERBOSE=true
-                shift
-                ;;
-            -h|--help)
-                show_help
-                exit 0
-                ;;
-            -*)
-                echo -e "${RED}Unknown option: $1${NC}"
-                show_help
-                exit 1
-                ;;
-            *)
-                if [ -z "$DOMAIN" ]; then
-                    DOMAIN="$1"
-                else
-                    echo -e "${RED}Multiple domains not supported${NC}"
-                    exit 1
-                fi
-                shift
-                ;;
-        esac
-    done
-    
-    if [ -z "$DOMAIN" ]; then
-        echo -e "${RED}Error: Domain/URL is required${NC}"
-        show_help
-        exit 1
-    fi
-}
-
-# Initialize scan environment
-init_scan() {
-    # Parse domain from input
-    if [[ "$DOMAIN" =~ ^https?:// ]]; then
-        CLEAN_DOMAIN=$(echo "$DOMAIN" | sed 's|https\?://||' | sed 's|/.*||' | sed 's|:.*||')
-        BASE_URL="$DOMAIN"
-    else
-        CLEAN_DOMAIN="$DOMAIN"
-        BASE_URL="https://$DOMAIN"
-    fi
-    
-    # Setup output directory structure
-    local output_base="${CUSTOM_OUTPUT:-$MAIN_RESULTS_DIR}"
-    RESULTS_DIR="$output_base/${CLEAN_DOMAIN//[^a-zA-Z0-9.-]/_}_$(date +%Y%m%d_%H%M%S)"
-    
-    mkdir -p "$RESULTS_DIR"/{js_files,findings,logs,reports}
-    
-    # Create scan metadata
-    cat > "$RESULTS_DIR/scan_info.txt" << EOF
-JSHawk Security Scan Report
-===========================
-Domain: $CLEAN_DOMAIN
-Base URL: $BASE_URL
-Scan Started: $(date)
-JSHawk Version: v1.0
-Custom Patterns: $([ -f "$CUSTOM_REGEX_FILE" ] && wc -l < "$CUSTOM_REGEX_FILE" || echo "0")
-EOF
-
-    echo -e "${BLUE}[INIT]${NC} Scan initialized"
-    echo -e "${BLUE}[INFO]${NC} Domain: $CLEAN_DOMAIN"
-    echo -e "${BLUE}[INFO]${NC} Results: $RESULTS_DIR"
-    [ "$VERBOSE" = true ] && echo -e "${BLUE}[INFO]${NC} Threads: $THREADS"
-    echo ""
-}
-
-# Enhanced JS discovery with better error handling
-enhanced_js_discovery() {
-    local target="$1"
-    local target_clean=$(echo "$target" | sed 's|https\?://||' | sed 's|/.*||')
-
-    echo -e "${CYAN}[DISCOVERY]${NC} Processing: $target"
-
-    local html_file="$RESULTS_DIR/temp_${target_clean//[^a-zA-Z0-9.-]/_}.html"
-    local js_list="$RESULTS_DIR/temp_js_${target_clean//[^a-zA-Z0-9.-]/_}.txt"
-    > "$js_list"
-
-    # Download with better error handling and retries
-    local download_success=false
-    for attempt in 1 2 3; do
-        if timeout 20 curl -s -L -k -m 20 --connect-timeout 10 \
-           -H "User-Agent: $USER_AGENT" \
-           -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" \
-           -H "Accept-Language: en-US,en;q=0.5" \
-           -H "Accept-Encoding: gzip, deflate" \
-           -H "Connection: keep-alive" \
-           --max-redirs 5 \
-           "$target" -o "$html_file" 2>/dev/null; then
+    def parse_source_map_content(self, content, source_url):
+        """Parse source map JSON content for secrets"""
+        try:
+            import json
+            source_map = json.loads(content)
+            all_secrets = []
             
-            if [ -s "$html_file" ]; then
-                download_success=true
-                break
-            fi
-        fi
-        [ "$VERBOSE" = true ] && echo -e "${YELLOW}[RETRY]${NC} Attempt $attempt failed for $target"
-        sleep 2
-    done
-
-    if [ "$download_success" = false ]; then
-        echo -e "${RED}[ERROR]${NC} Failed to download $target after 3 attempts"
-        return 1
-    fi
-
-    local file_size=$(wc -c < "$html_file")
-    echo -e "${GREEN}[SUCCESS]${NC} Downloaded $file_size bytes"
-
-    # Enhanced JS extraction with multiple methods
-    {
-        # Method 1: Standard src attributes
-        grep -oE 'src=["'"'"'][^"'"'"']*\.js[^"'"'"']*["\'"'"']' "$html_file" 2>/dev/null | \
-        sed 's/src=["'"'"']//g; s/["'"'"'].*//g'
-        
-        # Method 2: Script tags with .js references
-        grep -oE '["'"'"'][^"'"'"']*\.js(\?[^"'"'"']*)?["\'"'"']' "$html_file" 2>/dev/null | \
-        sed 's/["'"'"']//g'
-        
-        # Method 3: Import statements
-        grep -oE 'import.*["'"'"'][^"'"'"']*\.js[^"'"'"']*["\'"'"']' "$html_file" 2>/dev/null | \
-        sed -E 's/.*["'"'"']([^"'"'"']*\.js[^"'"'"']*)["\'"'"'].*/\1/'
-        
-        # Method 4: Dynamic imports
-        grep -oE 'import\([^)]*["'"'"'][^"'"'"']*\.js[^"'"'"']*["\'"'"'][^)]*\)' "$html_file" 2>/dev/null | \
-        sed -E 's/.*["'"'"']([^"'"'"']*\.js[^"'"'"']*)["\'"'"'].*/\1/'
-        
-        # Common JS paths for modern web apps
-        echo "/static/js/main.js"
-        echo "/static/js/app.js"
-        echo "/static/js/bundle.js"
-        echo "/static/js/chunk.js"
-        echo "/assets/js/main.js"
-        echo "/assets/js/app.js"
-        echo "/js/main.js"
-        echo "/js/app.js"
-        echo "/js/config.js"
-        echo "/js/settings.js"
-        echo "/dist/js/app.js"
-        echo "/build/static/js/main.js"
-        
-    } >> "$js_list"
-
-    # Process and deduplicate
-    sort "$js_list" | uniq | grep -E '\.js(\?|$)' > "$RESULTS_DIR/js_urls_${target_clean//[^a-zA-Z0-9.-]/_}.txt"
-    local discovered_count=$(wc -l < "$RESULTS_DIR/js_urls_${target_clean//[^a-zA-Z0-9.-]/_}.txt")
-
-    echo -e "${GREEN}[FOUND]${NC} $discovered_count unique JS files"
-
-    # Add to global list
-    while read -r js_path; do
-        if [ -n "$js_path" ]; then
-            echo "$target|$js_path" >> "$RESULTS_DIR/all_js_discovered.txt"
-        fi
-    done < "$RESULTS_DIR/js_urls_${target_clean//[^a-zA-Z0-9.-]/_}.txt"
-
-    # Cleanup temp files
-    rm -f "$html_file" "$js_list" "$RESULTS_DIR/js_urls_${target_clean//[^a-zA-Z0-9.-]/_}.txt"
-}
-
-# Parallel download function
-parallel_download() {
-    echo -e "${YELLOW}[DOWNLOAD]${NC} Starting parallel downloads (threads: $THREADS)..."
-
-    if [ ! -f "$RESULTS_DIR/all_js_discovered.txt" ]; then
-        echo -e "${RED}[ERROR]${NC} No JS files to download"
-        return 1
-    fi
-
-    local total_files=$(wc -l < "$RESULTS_DIR/all_js_discovered.txt")
-    echo -e "${BLUE}[INFO]${NC} Downloading $total_files JS files..."
-
-    local counter=1
-    local downloaded=0
-    local failed=0
-
-    # Create temporary download script
-    local download_script="$RESULTS_DIR/download_worker.sh"
-    cat > "$download_script" << 'EOF'
-#!/bin/bash
-download_single() {
-    local base_url="$1"
-    local js_path="$2"
-    local counter="$3"
-    local total="$4"
-    local results_dir="$5"
-    local user_agent="$6"
-    
-    if [ -z "$js_path" ]; then return 1; fi
-    
-    local js_url
-    if [[ "$js_path" =~ ^https?:// ]]; then
-        js_url="$js_path"
-    elif [[ "$js_path" =~ ^// ]]; then
-        js_url="https:$js_path"
-    elif [[ "$js_path" =~ ^/ ]]; then
-        js_url="$base_url$js_path"
-    else
-        js_url="$base_url/$js_path"
-    fi
-    
-    local filename="js_file_$(printf "%04d" $counter).js"
-    local filepath="$results_dir/js_files/$filename"
-    
-    if timeout 15 curl -s -L -k -m 15 --connect-timeout 8 \
-       -H "User-Agent: $user_agent" \
-       -H "Accept: application/javascript, text/javascript, */*" \
-       --max-redirs 3 \
-       "$js_url" -o "$filepath" 2>/dev/null; then
-        
-        if [ -s "$filepath" ]; then
-            local size=$(wc -c < "$filepath")
-            if [ $size -gt 100 ]; then
-                echo "$js_url|$filename|$size" >> "$results_dir/downloaded_files.txt"
-                echo "SUCCESS|$counter|$total|$filename|$size"
-                return 0
-            else
-                rm -f "$filepath"
-            fi
-        else
-            rm -f "$filepath"
-        fi
-    fi
-    
-    echo "FAILED|$counter|$total|$js_url"
-    return 1
-}
-
-download_single "$@"
-EOF
-    chmod +x "$download_script"
-
-    # Process downloads in parallel
-    export -f download_single
-    
-    while IFS='|' read -r base_url js_path; do
-        while [ $(jobs -r | wc -l) -ge "$THREADS" ]; do
-            sleep 0.1
-        done
-        
-        (
-            result=$("$download_script" "$base_url" "$js_path" "$counter" "$total_files" "$RESULTS_DIR" "$USER_AGENT")
-            echo "$result"
-        ) &
-        
-        counter=$((counter + 1))
-        
-    done < "$RESULTS_DIR/all_js_discovered.txt"
-    
-    # Wait for all downloads to complete
-    wait
-    
-    # Process results
-    if [ -f "$RESULTS_DIR/downloaded_files.txt" ]; then
-        downloaded=$(wc -l < "$RESULTS_DIR/downloaded_files.txt")
-    fi
-    
-    failed=$((total_files - downloaded))
-    
-    echo ""
-    echo -e "${GREEN}[DOWNLOAD COMPLETE]${NC} Success: $downloaded, Failed: $failed"
-    
-    rm -f "$download_script"
-    
-    if [ $downloaded -eq 0 ]; then
-        echo -e "${RED}[ERROR]${NC} No files downloaded successfully"
-        return 1
-    fi
-    
-    return 0
-}
-
-# Enhanced credential detection with custom patterns
-analyze_enhanced_secrets() {
-    echo -e "${YELLOW}[ANALYZE]${NC} Enhanced credential detection with custom patterns..."
-
-    local secrets_file="$RESULTS_DIR/findings/secrets.txt"
-    local summary_file="$RESULTS_DIR/findings/summary.txt"
-    local detailed_report="$RESULTS_DIR/reports/detailed_analysis.txt"
-
-    > "$secrets_file"
-
-    local files_count=$(find "$RESULTS_DIR/js_files" -name "*.js" | wc -l)
-    echo -e "${BLUE}[INFO]${NC} Analyzing $files_count JS files..."
-
-    # Process each JS file
-    find "$RESULTS_DIR/js_files" -name "*.js" -type f | while read -r jsfile; do
-        local filename=$(basename "$jsfile")
-        local original_url=$(grep "|$filename|" "$RESULTS_DIR/downloaded_files.txt" 2>/dev/null | cut -d'|' -f1)
-
-        [ "$VERBOSE" = true ] && echo -e "${CYAN}[SCAN]${NC} $filename"
-
-        # Built-in patterns (your existing comprehensive patterns)
-        
-        # AWS Credentials
-        grep -nE '(aws[_-]?access[_-]?key[_-]?id|access[_-]?key[_-]?id|accessKeyId)["\'"'"'\s]*[=:]["\'"'"'\s]*["\'"'"'](AKIA[0-9A-Z]{16})["\'"'"']' "$jsfile" 2>/dev/null | while IFS=: read -r line match; do
-            local secret=$(echo "$match" | sed -E 's/.*["\'"'"'](AKIA[0-9A-Z]{16})["\'"'"'].*/\1/')
-            echo "AWS_ACCESS_KEY|$secret|$filename|$original_url|$line" >> "$secrets_file"
-            echo -e "${RED}[AWS-ACCESS]${NC} $secret"
-        done
-
-        grep -nE '(aws[_-]?secret[_-]?access[_-]?key|secret[_-]?access[_-]?key|secretAccessKey)["\'"'"'\s]*[=:]["\'"'"'\s]*["\'"'"']([A-Za-z0-9/+]{40})["\'"'"']' "$jsfile" 2>/dev/null | while IFS=: read -r line match; do
-            local secret=$(echo "$match" | sed -E 's/.*["\'"'"']([A-Za-z0-9/+]{40})["\'"'"'].*/\1/')
-            if [[ "$secret" =~ ^[A-Za-z0-9/+]{40}$ ]] && ! echo "$secret" | grep -qE '^[a-f0-9]{40}$|^[A-F0-9]{40}$'; then
-                echo "AWS_SECRET_KEY|$secret|$filename|$original_url|$line" >> "$secrets_file"
-                echo -e "${RED}[AWS-SECRET]${NC} $secret"
-            fi
-        done
-
-        # GitHub Tokens
-        grep -nE '\b(ghp_[A-Za-z0-9_]{36}|gho_[A-Za-z0-9_]{36}|ghu_[A-Za-z0-9_]{36}|ghs_[A-Za-z0-9_]{36}|ghr_[A-Za-z0-9_]{36})\b' "$jsfile" 2>/dev/null | while IFS=: read -r line match; do
-            local secret=$(echo "$match" | grep -oE 'gh[poshru]_[A-Za-z0-9_]{36}')
-            echo "GITHUB_TOKEN|$secret|$filename|$original_url|$line" >> "$secrets_file"
-            echo -e "${RED}[GITHUB]${NC} $secret"
-        done
-
-        # Google API Keys
-        grep -nE '\b(AIza[0-9A-Za-z_-]{35})\b' "$jsfile" 2>/dev/null | while IFS=: read -r line match; do
-            local secret=$(echo "$match" | grep -oE 'AIza[0-9A-Za-z_-]{35}')
-            echo "GOOGLE_API_KEY|$secret|$filename|$original_url|$line" >> "$secrets_file"
-            echo -e "${RED}[GOOGLE-API]${NC} $secret"
-        done
-
-        # Slack Tokens
-        grep -nE '\b(xoxb-[0-9a-zA-Z-]+|xoxa-[0-9a-zA-Z-]+|xoxp-[0-9a-zA-Z-]+|xoxr-[0-9a-zA-Z-]+)\b' "$jsfile" 2>/dev/null | while IFS=: read -r line match; do
-            local secret=$(echo "$match" | grep -oE 'xox[baprs]-[0-9a-zA-Z-]+')
-            echo "SLACK_TOKEN|$secret|$filename|$original_url|$line" >> "$secrets_file"
-            echo -e "${RED}[SLACK]${NC} $secret"
-        done
-
-        # Stripe Live Keys
-        grep -nE '\b((sk|pk|rk)_live_[0-9a-zA-Z]{24,})\b' "$jsfile" 2>/dev/null | while IFS=: read -r line match; do
-            local secret=$(echo "$match" | grep -oE '(sk|pk|rk)_live_[0-9a-zA-Z]{24,}')
-            echo "STRIPE_LIVE_KEY|$secret|$filename|$original_url|$line" >> "$secrets_file"
-            echo -e "${RED}[STRIPE-LIVE]${NC} $secret"
-        done
-
-        # SendGrid API Keys
-        grep -nE '\b(SG\.[A-Za-z0-9_.-]{66})\b' "$jsfile" 2>/dev/null | while IFS=: read -r line match; do
-            local secret=$(echo "$match" | grep -oE 'SG\.[A-Za-z0-9_.-]{66}')
-            echo "SENDGRID_API_KEY|$secret|$filename|$original_url|$line" >> "$secrets_file"
-            echo -e "${RED}[SENDGRID]${NC} $secret"
-        done
-
-        # Database URLs
-        grep -nE '\b(mysql|postgresql|postgres|mongodb|redis)://[a-zA-Z0-9_-]+:[^@\s"'"'"']+@[a-zA-Z0-9.-]+' "$jsfile" 2>/dev/null | while IFS=: read -r line match; do
-            local secret=$(echo "$match" | grep -oE '(mysql|postgresql|postgres|mongodb|redis)://[a-zA-Z0-9_-]+:[^@\s"'"'"']+@[a-zA-Z0-9.-]+[^"\s'"'"']*')
-            echo "DATABASE_URL|$secret|$filename|$original_url|$line" >> "$secrets_file"
-            echo -e "${RED}[DATABASE]${NC} $secret"
-        done
-
-        # Private Keys
-        if grep -q "BEGIN.*PRIVATE.*KEY" "$jsfile" 2>/dev/null; then
-            local key_line=$(grep -n "BEGIN.*PRIVATE.*KEY" "$jsfile" | head -1 | cut -d: -f1)
-            echo "PRIVATE_KEY|Found private key block|$filename|$original_url|$key_line" >> "$secrets_file"
-            echo -e "${RED}[PRIVATE-KEY]${NC} Found in $filename"
-        fi
-
-        # Custom patterns from user configuration
-        if [ -f "$CUSTOM_REGEX_FILE" ] && [ -s "$CUSTOM_REGEX_FILE" ]; then
-            while IFS='|' read -r pattern_name regex_pattern description; do
-                if [ -n "$pattern_name" ] && [ -n "$regex_pattern" ]; then
-                    grep -nE "$regex_pattern" "$jsfile" 2>/dev/null | while IFS=: read -r line match; do
-                        local secret=$(echo "$match" | grep -oE "$regex_pattern" | head -1)
-                        if [ -n "$secret" ]; then
-                            echo "CUSTOM_$pattern_name|$secret|$filename|$original_url|$line" >> "$secrets_file"
-                            echo -e "${PURPLE}[CUSTOM-$pattern_name]${NC} $secret"
-                        fi
-                    done
-                fi
-            done < "$CUSTOM_REGEX_FILE"
-        fi
-
-    done
-
-    # Generate comprehensive reports
-    generate_reports "$secrets_file" "$summary_file" "$detailed_report" "$files_count"
-}
-
-# Generate detailed reports
-generate_reports() {
-    local secrets_file="$1"
-    local summary_file="$2"
-    local detailed_report="$3"
-    local files_count="$4"
-
-    if [ -f "$secrets_file" ] && [ -s "$secrets_file" ]; then
-        local total_found=$(wc -l < "$secrets_file")
-
-        # Summary report
-        {
-            echo "JSHawk v1.0 - Enhanced Security Analysis Report"
-            echo "=============================================="
-            echo "Domain: $CLEAN_DOMAIN"
-            echo "Scan Date: $(date)"
-            echo "JS Files Analyzed: $files_count"
-            echo "Total Secrets Found: $total_found"
-            echo ""
-            echo "SECURITY RISK ASSESSMENT:"
-            echo "========================"
+            # Check sources content if available
+            if 'sourcesContent' in source_map and source_map['sourcesContent']:
+                for i, source_content in enumerate(source_map['sourcesContent']):
+                    if source_content:
+                        source_name = source_map.get('sources', [f'source_{i}'])[i] if i < len(source_map.get('sources', [])) else f'source_{i}'
+                        secrets = self.extract_secrets(source_content, f"{source_url}#{source_name}")
+                        all_secrets.extend(secrets)
             
-            local critical_count=$(grep -E "(AWS_ACCESS_KEY|AWS_SECRET_KEY|STRIPE_LIVE_KEY|DATABASE_URL|PRIVATE_KEY)" "$secrets_file" | wc -l)
-            local high_count=$(grep -E "(GITHUB_TOKEN|GOOGLE_API_KEY|SLACK_TOKEN|SENDGRID_API_KEY)" "$secrets_file" | wc -l)
-            local medium_count=$(grep -E "(API_KEY|JWT_SECRET)" "$secrets_file" | wc -l)
-            local custom_count=$(grep "CUSTOM_" "$secrets_file" | wc -l)
+            # Check source map metadata for potential secrets
+            for key, value in source_map.items():
+                if isinstance(value, str) and len(value) > 10:
+                    secrets = self.extract_secrets(value, f"{source_url}#metadata")
+                    all_secrets.extend(secrets)
+                    
+            return all_secrets, []
+        except:
+            return [], []
+
+    def extract_endpoints(self, content,#!/usr/bin/env python3
+"""
+JavaScript Secrets Hunter - Bug Bounty Tool
+Discovers JS files and extracts hardcoded credentials/secrets
+"""
+
+import requests
+import re
+import argparse
+import json
+import threading
+import time
+from urllib.parse import urljoin, urlparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import sys
+from colorama import Fore, Back, Style, init
+
+# Initialize colorama for cross-platform colored output
+init(autoreset=True)
+
+class JSSecretsHunter:
+    def __init__(self, target_url, threads=10, timeout=10, user_agent=None):
+        self.target_url = target_url if target_url.startswith(('http://', 'https://')) else f'https://{target_url}'
+        self.domain = urlparse(self.target_url).netloc
+        self.threads = threads
+        self.timeout = timeout
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': user_agent or 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        })
+        self.js_files = set()
+        self.secrets_found = []
+        
+        # Comprehensive regex patterns for different types of secrets
+        self.patterns = {
+            'api_keys': [
+                r'["\']?[Aa]pi[_-]?[Kk]ey["\']?\s*[:=]\s*["\']([A-Za-z0-9_\-]{20,})["\']',
+                r'["\']?[Aa]ccess[_-]?[Kk]ey["\']?\s*[:=]\s*["\']([A-Za-z0-9_\-]{20,})["\']',
+                r'["\']?[Ss]ecret[_-]?[Kk]ey["\']?\s*[:=]\s*["\']([A-Za-z0-9_\-]{20,})["\']',
+            ],
+            'aws_keys': [
+                r'AKIA[0-9A-Z]{16}',
+                r'["\']?[Aa]ws[_-]?[Aa]ccess[_-]?[Kk]ey[_-]?[Ii]d["\']?\s*[:=]\s*["\']?(AKIA[0-9A-Z]{16})["\']?',
+                r'["\']?[Aa]ws[_-]?[Ss]ecret[_-]?[Aa]ccess[_-]?[Kk]ey["\']?\s*[:=]\s*["\']([A-Za-z0-9/+=]{40})["\']',
+            ],
+            'database_urls': [
+                r'["\']?[Dd]atabase[_-]?[Uu]rl["\']?\s*[:=]\s*["\']([^"\']+://[^"\']+)["\']',
+                r'["\']?[Mm]ongo[_-]?[Uu]rl["\']?\s*[:=]\s*["\']([^"\']+://[^"\']+)["\']',
+                r'["\']?[Dd]b[_-]?[Uu]rl["\']?\s*[:=]\s*["\']([^"\']+://[^"\']+)["\']',
+                r'mysql://[^\s"\']+',
+                r'postgres://[^\s"\']+',
+                r'mongodb://[^\s"\']+',
+            ],
+            'jwt_secrets': [
+                r'["\']?[Jj]wt[_-]?[Ss]ecret["\']?\s*[:=]\s*["\']([A-Za-z0-9_\-]{20,})["\']',
+                r'["\']?[Jj]wt[_-]?[Kk]ey["\']?\s*[:=]\s*["\']([A-Za-z0-9_\-]{20,})["\']',
+                r'["\']?[Tt]oken[_-]?[Ss]ecret["\']?\s*[:=]\s*["\']([A-Za-z0-9_\-]{20,})["\']',
+            ],
+            'passwords': [
+                r'["\']?[Pp]assword["\']?\s*[:=]\s*["\']([^"\']{6,})["\']',
+                r'["\']?[Pp]ass["\']?\s*[:=]\s*["\']([^"\']{6,})["\']',
+                r'["\']?[Pp]wd["\']?\s*[:=]\s*["\']([^"\']{6,})["\']',
+            ],
+            'usernames': [
+                r'["\']?[Uu]sername["\']?\s*[:=]\s*["\']([^"\']{3,})["\']',
+                r'["\']?[Uu]ser["\']?\s*[:=]\s*["\']([^"\']{3,})["\']',
+                r'["\']?[Aa]dmin[_-]?[Uu]ser["\']?\s*[:=]\s*["\']([^"\']{3,})["\']',
+            ],
+            'github_tokens': [
+                r'ghp_[A-Za-z0-9_]{36}',
+                r'gho_[A-Za-z0-9_]{36}',
+                r'ghu_[A-Za-z0-9_]{36}',
+                r'ghs_[A-Za-z0-9_]{36}',
+                r'ghr_[A-Za-z0-9_]{36}',
+            ],
+            'slack_tokens': [
+                r'xox[baprs]-[0-9a-zA-Z\-]+',
+                r'["\']?[Ss]lack[_-]?[Tt]oken["\']?\s*[:=]\s*["\']?(xox[baprs]-[0-9a-zA-Z\-]+)["\']?',
+            ],
+            'discord_tokens': [
+                r'[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}',
+                r'mfa\.[a-z0-9_\-]{84}',
+            ],
+            'google_api': [
+                r'AIza[0-9A-Za-z\\-_]{35}',
+                r'["\']?[Gg]oogle[_-]?[Aa]pi[_-]?[Kk]ey["\']?\s*[:=]\s*["\']?(AIza[0-9A-Za-z\\-_]{35})["\']?',
+            ],
+            'stripe_keys': [
+                r'sk_live_[0-9a-zA-Z]{24,}',
+                r'pk_live_[0-9a-zA-Z]{24,}',
+                r'rk_live_[0-9a-zA-Z]{24,}',
+            ],
+            'twilio_keys': [
+                r'SK[a-z0-9]{32}',
+                r'AC[a-z0-9]{32}',
+            ],
+            'mailgun_keys': [
+                r'key-[0-9a-zA-Z]{32}',
+            ],
+            'sendgrid_keys': [
+                r'SG\.[a-zA-Z0-9_\-\.]{66}',
+            ],
+            'private_keys': [
+                r'-----BEGIN PRIVATE KEY-----[A-Za-z0-9+/=\s]+-----END PRIVATE KEY-----',
+                r'-----BEGIN RSA PRIVATE KEY-----[A-Za-z0-9+/=\s]+-----END RSA PRIVATE KEY-----',
+            ],
+            'firebase_urls': [
+                r'https://[a-z0-9\-]+\.firebaseio\.com',
+                r'["\']?[Ff]irebase[_-]?[Uu]rl["\']?\s*[:=]\s*["\']?(https://[a-z0-9\-]+\.firebaseio\.com)["\']?',
+            ],
+            'base64_secrets': [
+                r'["\']([A-Za-z0-9+/]{40,}={0,2})["\']',  # Potential base64 encoded secrets
+            ]
+        }
+
+    def print_banner(self):
+        banner = f"""
+{Fore.CYAN}╔══════════════════════════════════════════════════════════════╗
+║                    JavaScript Secrets Hunter                 ║
+║                        Bug Bounty Tool                       ║
+╚══════════════════════════════════════════════════════════════╝{Style.RESET_ALL}
+
+{Fore.YELLOW}Target: {self.target_url}
+Threads: {self.threads}
+Timeout: {self.timeout}s{Style.RESET_ALL}
+"""
+        print(banner)
+
+    def discover_js_files(self):
+        """Discover JavaScript files from various sources"""
+        print(f"{Fore.BLUE}[INFO]{Style.RESET_ALL} Starting JavaScript file discovery...")
+        
+        # Common JS file paths to check
+        common_paths = [
+            '/static/js/',
+            '/assets/js/',
+            '/js/',
+            '/build/static/js/',
+            '/dist/js/',
+            '/public/js/',
+            '/scripts/',
+            '/app/',
+            '/src/',
+        ]
+        
+        # Try to get the main page and extract JS references
+        try:
+            response = self.session.get(self.target_url, timeout=self.timeout)
+            if response.status_code == 200:
+                self.extract_js_from_html(response.text)
+        except Exception as e:
+            print(f"{Fore.RED}[ERROR]{Style.RESET_ALL} Failed to fetch main page: {e}")
+
+        # Check common paths
+        self.check_common_paths(common_paths)
+        
+        # Check for webpack chunks and common patterns
+        self.discover_webpack_chunks()
+        
+        print(f"{Fore.GREEN}[SUCCESS]{Style.RESET_ALL} Discovered {len(self.js_files)} JavaScript files")
+        return list(self.js_files)
+
+    def extract_js_from_html(self, html_content):
+        """Extract JavaScript file references from HTML"""
+        js_patterns = [
+            r'<script[^>]+src=["\']([^"\']+\.js[^"\']*)["\']',
+            r'<script[^>]+src=([^\s>]+\.js[^\s>]*)',
+            r'["\']([^"\']*\.js[^"\']*)["\']',
+        ]
+        
+        for pattern in js_patterns:
+            matches = re.findall(pattern, html_content, re.IGNORECASE)
+            for match in matches:
+                if match.endswith('.js') or '.js?' in match:
+                    full_url = urljoin(self.target_url, match)
+                    self.js_files.add(full_url)
+
+    def check_common_paths(self, paths):
+        """Check common JavaScript file paths"""
+        def check_path(path):
+            try:
+                url = urljoin(self.target_url, path)
+                response = self.session.get(url, timeout=self.timeout)
+                if response.status_code == 200:
+                    # Look for JS files in directory listing or extract from content
+                    self.extract_js_from_html(response.text)
+            except:
+                pass
+
+        with ThreadPoolExecutor(max_workers=self.threads) as executor:
+            executor.map(check_path, paths)
+
+    def discover_webpack_chunks(self):
+        """Discover webpack chunks and common build patterns"""
+        webpack_patterns = [
+            '/static/js/main.{hash}.chunk.js',
+            '/static/js/{number}.{hash}.chunk.js',
+            '/static/js/runtime-main.{hash}.js',
+            '/static/js/app.{hash}.js',
+            '/build/static/js/main.{hash}.js',
+            '/js/app.{hash}.js',
+            '/js/vendor.{hash}.js',
+            '/js/main.{hash}.js',
+        ]
+        
+        # Try common hash lengths and numbers
+        hashes = ['[a-f0-9]{8}', '[a-f0-9]{20}', '[a-f0-9]{32}']
+        numbers = range(0, 10)
+        
+        for pattern in webpack_patterns:
+            for hash_pattern in hashes:
+                test_pattern = pattern.replace('{hash}', hash_pattern)
+                if '{number}' in test_pattern:
+                    for num in numbers:
+                        final_pattern = test_pattern.replace('{number}', str(num))
+                        self.try_pattern_discovery(final_pattern)
+                else:
+                    self.try_pattern_discovery(test_pattern)
+
+    def try_pattern_discovery(self, pattern):
+        """Try to discover files matching a pattern"""
+        # This would typically involve trying common hash values
+        # For now, we'll add some common examples
+        common_hashes = [
+            'a1b2c3d4', '12345678', 'abcdef12', 
+            '9a8b7c6d5e4f3g2h1i0j', 'main', 'app'
+        ]
+        
+        for hash_val in common_hashes:
+            test_url = pattern.replace('[a-f0-9]{8}', hash_val).replace('[a-f0-9]{20}', hash_val*3).replace('[a-f0-9]{32}', hash_val*4)
+            try:
+                full_url = urljoin(self.target_url, test_url)
+                response = self.session.head(full_url, timeout=self.timeout)
+                if response.status_code == 200:
+                    self.js_files.add(full_url)
+            except:
+                continue
+
+    def analyze_js_file(self, js_url):
+        """Analyze a single JavaScript file for secrets"""
+        try:
+            response = self.session.get(js_url, timeout=self.timeout)
+            if response.status_code == 200:
+                content = response.text
+                secrets = self.extract_secrets(content, js_url)
+                return secrets
+        except Exception as e:
+            print(f"{Fore.RED}[ERROR]{Style.RESET_ALL} Failed to analyze {js_url}: {e}")
+        return []
+
+    def extract_secrets(self, content, source_url):
+        """Extract secrets from JavaScript content using regex patterns"""
+        found_secrets = []
+        
+        for category, patterns in self.patterns.items():
+            for pattern in patterns:
+                matches = re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE)
+                for match in matches:
+                    secret_value = match.group(1) if match.groups() else match.group(0)
+                    
+                    # Skip common false positives
+                    if self.is_false_positive(secret_value, category):
+                        continue
+                    
+                    # Get surrounding context
+                    start = max(0, match.start() - 50)
+                    end = min(len(content), match.end() + 50)
+                    context = content[start:end].replace('\n', ' ').strip()
+                    
+                    secret_info = {
+                        'category': category,
+                        'value': secret_value,
+                        'pattern': pattern,
+                        'source': source_url,
+                        'context': context,
+                        'line_number': content[:match.start()].count('\n') + 1
+                    }
+                    
+                    found_secrets.append(secret_info)
+                    
+        return found_secrets
+
+    def is_false_positive(self, value, category):
+        """Filter out common false positives"""
+        false_positives = {
+            'passwords': ['password', 'pass', '123456', 'admin', 'test', 'demo', 'example'],
+            'usernames': ['user', 'admin', 'test', 'demo', 'example', 'username'],
+            'api_keys': ['your-api-key', 'api-key-here', 'your_api_key', 'xxxx', 'yyyy'],
+            'base64_secrets': ['placeholder', 'example', 'test', 'demo']
+        }
+        
+        if category in false_positives:
+            value_lower = value.lower()
+            for fp in false_positives[category]:
+                if fp in value_lower or len(value) < 8:
+                    return True
+        
+        return False
+
+    def run_analysis(self):
+        """Main function to run the complete analysis"""
+        self.print_banner()
+        
+        # Step 1: Discover JS files
+        js_files = self.discover_js_files()
+        
+        if not js_files:
+            print(f"{Fore.YELLOW}[WARNING]{Style.RESET_ALL} No JavaScript files found to analyze")
+            return
             
-            echo "🔴 CRITICAL: $critical_count (Immediate action required)"
-            echo "🟠 HIGH: $high_count (Review and rotate)"
-            echo "🟡 MEDIUM: $medium_count (Monitor and assess)"
-            echo "🟣 CUSTOM: $custom_count (User-defined patterns)"
+        print(f"\n{Fore.BLUE}[INFO]{Style.RESET_ALL} Analyzing {len(js_files)} JavaScript files for secrets...")
+        
+        # Step 2: Analyze files for secrets
+        with ThreadPoolExecutor(max_workers=self.threads) as executor:
+            future_to_url = {executor.submit(self.analyze_js_file, url): url for url in js_files}
             
-            echo ""
-            echo "CREDENTIAL BREAKDOWN:"
-            echo "===================="
-            cut -d'|' -f1 "$secrets_file" | sort | uniq -c | sort -nr
+            for future in as_completed(future_to_url):
+                url = future_to_url[future]
+                try:
+                    secrets = future.result()
+                    if secrets:
+                        self.secrets_found.extend(secrets)
+                        print(f"{Fore.GREEN}[FOUND]{Style.RESET_ALL} {len(secrets)} secrets in {url}")
+                    else:
+                        print(f"{Fore.CYAN}[CLEAN]{Style.RESET_ALL} No secrets found in {url}")
+                except Exception as e:
+                    print(f"{Fore.RED}[ERROR]{Style.RESET_ALL} Error analyzing {url}: {e}")
+
+        # Display results
+        self.display_results()
+
+    def display_results(self):
+        """Display the analysis results"""
+        print(f"\n{Fore.MAGENTA}{'='*80}{Style.RESET_ALL}")
+        print(f"{Fore.MAGENTA}                           ANALYSIS RESULTS{Style.RESET_ALL}")
+        print(f"{Fore.MAGENTA}{'='*80}{Style.RESET_ALL}\n")
+        
+        if not self.secrets_found:
+            print(f"{Fore.YELLOW}[INFO]{Style.RESET_ALL} No secrets found in the analyzed files.")
+            return
             
-        } > "$summary_file"
-
-        # Detailed analysis report
-        {
-            echo "JSHawk v1.0 - Detailed Security Analysis"
-            echo "========================================"
-            echo "Generated: $(date)"
-            echo "Domain: $CLEAN_DOMAIN"
-            echo ""
-            echo "EXECUTIVE SUMMARY:"
-            echo "=================="
-            echo "This scan identified $total_found potential security credentials in JavaScript files."
-            echo "Immediate attention is required for CRITICAL findings."
-            echo ""
-            echo "DETAILED FINDINGS:"
-            echo "=================="
-            echo ""
+        # Group secrets by category
+        by_category = {}
+        for secret in self.secrets_found:
+            category = secret['category']
+            if category not in by_category:
+                by_category[category] = []
+            by_category[category].append(secret)
             
-            # Group findings by type
-            cut -d'|' -f1 "$secrets_file" | sort | uniq | while read -r cred_type; do
-                echo "[$cred_type]"
-                echo "$(printf '=%.0s' {1..40})"
-                grep "^$cred_type|" "$secrets_file" | while IFS='|' read -r type secret file url line; do
-                    echo "  File: $file"
-                    echo "  URL: $url"
-                    echo "  Line: $line"
-                    if [ ${#secret} -lt 80 ]; then
-                        echo "  Secret: $secret"
-                    else
-                        echo "  Secret: ${secret:0:60}..."
-                    fi
-                    echo ""
-                done
-                echo ""
-            done
-            
-        } > "$detailed_report"
+        print(f"{Fore.GREEN}[SUCCESS]{Style.RESET_ALL} Found {len(self.secrets_found)} potential secrets across {len(by_category)} categories\n")
+        
+        for category, secrets in by_category.items():
+            print(f"{Fore.CYAN}┌─ {category.upper()} ({len(secrets)} found){Style.RESET_ALL}")
+            for i, secret in enumerate(secrets, 1):
+                print(f"{Fore.CYAN}├─{Style.RESET_ALL} {i}. {Fore.RED}{secret['value']}{Style.RESET_ALL}")
+                print(f"{Fore.CYAN}│   Source:{Style.RESET_ALL} {secret['source']}")
+                print(f"{Fore.CYAN}│   Line:{Style.RESET_ALL} {secret['line_number']}")
+                print(f"{Fore.CYAN}│   Context:{Style.RESET_ALL} ...{secret['context']}...")
+                if i < len(secrets):
+                    print(f"{Fore.CYAN}│{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}└─{Style.RESET_ALL}\n")
 
-        echo ""
-        echo -e "${GREEN}[COMPLETE]${NC} Found $total_found credentials across $files_count files!"
+    def save_results(self, output_file):
+        """Save results to JSON file"""
+        results = {
+            'target': self.target_url,
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'statistics': {
+                'js_files_found': len(self.js_files),
+                'source_maps_found': len(self.source_maps),
+                'secrets_found': len(self.secrets_found),
+                'endpoints_found': len(self.endpoints_found)
+            },
+            'secrets': self.secrets_found,
+            'endpoints': self.endpoints_found,
+            'js_files': list(self.js_files),
+            'source_maps': list(self.source_maps)
+        }
+        
+        with open(output_file, 'w') as f:
+            json.dump(results, f, indent=2)
+        print(f"{Fore.GREEN}[SUCCESS]{Style.RESET_ALL} Results saved to {output_file}")
 
-    else
-        echo "No validated credentials found." > "$summary_file"
-        echo "Clean scan - no credentials detected." > "$detailed_report"
-        echo -e "${YELLOW}[CLEAN]${NC} No credentials detected"
-    fi
-}
-
-# Main execution function
-main() {
-    show_banner
-    parse_args "$@"
-    init_scan
-
-    echo -e "${BLUE}[START]${NC} Enhanced credential detection on target: $CLEAN_DOMAIN"
-
-    # Create target list
-    local targets_file="$RESULTS_DIR/targets.txt"
+def main():
+    parser = argparse.ArgumentParser(description='JavaScript Secrets Hunter - Bug Bounty Tool')
+    parser.add_argument('url', help='Target URL to analyze')
+    parser.add_argument('-t', '--threads', type=int, default=10, help='Number of threads (default: 10)')
+    parser.add_argument('--timeout', type=int, default=10, help='Request timeout in seconds (default: 10)')
+    parser.add_argument('-o', '--output', help='Output JSON file for results')
+    parser.add_argument('--user-agent', help='Custom User-Agent string')
     
-    if [ -n "$SUBDOMAIN_FILE" ] && [ -f "$SUBDOMAIN_FILE" ]; then
-        echo -e "${YELLOW}[SUBDOMAINS]${NC} Processing: $SUBDOMAIN_FILE"
-        while read -r line; do
-            if [ -n "$line" ] && [[ ! "$line" =~ ^# ]]; then
-                subdomain=$(echo "$line" | tr -d '\r\n' | xargs)
-                if [ -n "$subdomain" ]; then
-                    [[ "$subdomain" =~ ^https?:// ]] && echo "$subdomain" >> "$targets_file" || echo "https://$subdomain" >> "$targets_file"
-                fi
-            fi
-        done < "$SUBDOMAIN_FILE"
-        local target_count=$(wc -l < "$targets_file")
-        echo -e "${GREEN}[SUCCESS]${NC} Loaded $target_count targets"
-    else
-        echo -e "${YELLOW}[SINGLE]${NC} Single domain mode"
-        echo "$BASE_URL" > "$targets_file"
-        target_count=1
-    fi
-
-    # Phase 1: Discovery
-    echo -e "${YELLOW}[PHASE 1]${NC} JavaScript Discovery"
-    > "$RESULTS_DIR/all_js_discovered.txt"
-
-    while read -r target; do
-        enhanced_js_discovery "$target"
-    done < "$targets_file"
-
-    local total_js=$(wc -l < "$RESULTS_DIR/all_js_discovered.txt" 2>/dev/null || echo "0")
-    echo -e "${BLUE}[DISCOVERY COMPLETE]${NC} Found $total_js JavaScript files"
-
-    if [ "$total_js" -eq 0 ]; then
-        echo -e "${RED}[ERROR]${NC} No JavaScript files discovered"
-        exit 1
-    fi
-
-    # Phase 2: Download
-    echo -e "${YELLOW}[PHASE 2]${NC} Parallel Download"
-    if ! parallel_download; then
-        echo -e "${RED}[ERROR]${NC} Download phase failed"
-        exit 1
-    fi
-
-    # Phase 3: Enhanced Analysis
-    echo -e "${YELLOW}[PHASE 3]${NC} Enhanced Security Analysis"
-    analyze_enhanced_secrets
-
-    # Phase 4: Generate final report
-    echo -e "${YELLOW}[PHASE 4]${NC} Report Generation"
-    generate_final_report
-
-    echo ""
-    echo -e "${PURPLE}${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${PURPLE}${BOLD}║                  JSHAWK SCAN COMPLETE                        ║${NC}"
-    echo -e "${PURPLE}${BOLD}╚══════════════════════════════════════════════════════════════╝${NC}"
-
-    display_final_summary
-}
-
-# Generate final comprehensive report
-generate_final_report() {
-    local final_report="$RESULTS_DIR/jshawk_final_report.txt"
-    local js_count=$(find "$RESULTS_DIR/js_files" -name "*.js" | wc -l)
+    args = parser.parse_args()
     
-    {
-        echo "╔══════════════════════════════════════════════════════════════╗"
-        echo "║                   JSHawk Security Report                     ║"
-        echo "╚══════════════════════════════════════════════════════════════╝"
-        echo ""
-        echo "Scan Target: $CLEAN_DOMAIN"
-        echo "Scan Date: $(date)"
-        echo "JSHawk Version: v1.0"
-        echo ""
-        echo "SCAN STATISTICS:"
-        echo "==============="
-        echo "JavaScript Files Analyzed: $js_count"
-        echo "Total Download Size: $(du -sh "$RESULTS_DIR/js_files" 2>/dev/null | cut -f1 || echo "0B")"
+    hunter = JSSecretsHunter(
+        target_url=args.url,
+        threads=args.threads,
+        timeout=args.timeout,
+        user_agent=args.user_agent
+    )
+    
+    try:
+        hunter.run_analysis()
         
-        if [ -f "$RESULTS_DIR/findings/secrets.txt" ] && [ -s "$RESULTS_DIR/findings/secrets.txt" ]; then
-            local secret_count=$(wc -l < "$RESULTS_DIR/findings/secrets.txt")
-            echo "Security Issues Found: $secret_count"
-            echo ""
-            echo "RISK ASSESSMENT:"
-            echo "==============="
+        if args.output:
+            hunter.save_results(args.output)
             
-            local critical=$(grep -E "(AWS_ACCESS_KEY|AWS_SECRET_KEY|STRIPE_LIVE_KEY|DATABASE_URL|PRIVATE_KEY)" "$RESULTS_DIR/findings/secrets.txt" | wc -l)
-            local high=$(grep -E "(GITHUB_TOKEN|GOOGLE_API_KEY|SLACK_TOKEN|SENDGRID_API_KEY)" "$RESULTS_DIR/findings/secrets.txt" | wc -l)
-            local medium=$(grep -E "(API_KEY|JWT_SECRET)" "$RESULTS_DIR/findings/secrets.txt" | wc -l)
-            local custom=$(grep "CUSTOM_" "$RESULTS_DIR/findings/secrets.txt" | wc -l)
-            
-            echo "🔴 CRITICAL Risk: $critical findings"
-            echo "🟠 HIGH Risk: $high findings"
-            echo "🟡 MEDIUM Risk: $medium findings"
-            echo "🟣 CUSTOM Patterns: $custom findings"
-            echo ""
-            
-            if [ $critical -gt 0 ]; then
-                echo "⚠️  IMMEDIATE ACTION REQUIRED"
-                echo "Critical security credentials detected in JavaScript files."
-                echo "These should be rotated immediately and moved to secure storage."
-            fi
-            
-        else
-            echo "Security Issues Found: 0"
-            echo ""
-            echo "✅ CLEAN SCAN"
-            echo "No security credentials detected in JavaScript files."
-        fi
-        
-        echo ""
-        echo "FILES GENERATED:"
-        echo "==============="
-        echo "📁 Main Results: $RESULTS_DIR"
-        echo "📄 Summary Report: findings/summary.txt"
-        echo "📄 Detailed Analysis: reports/detailed_analysis.txt"
-        echo "📄 Raw Findings: findings/secrets.txt"
-        echo "📁 Downloaded JS: js_files/"
-        echo ""
-        echo "RECOMMENDATIONS:"
-        echo "==============="
-        echo "1. Review all CRITICAL and HIGH risk findings immediately"
-        echo "2. Rotate any exposed credentials"
-        echo "3. Implement proper secrets management"
-        echo "4. Add security scanning to CI/CD pipeline"
-        echo "5. Regular security audits of client-side code"
-        echo ""
-        echo "Generated by JSHawk v1.0 - Advanced JavaScript Security Scanner"
-        echo "GitHub: https://github.com/yourusername/jshawk"
-        
-    } > "$final_report"
-}
+    except KeyboardInterrupt:
+        print(f"\n{Fore.YELLOW}[INFO]{Style.RESET_ALL} Analysis interrupted by user")
+    except Exception as e:
+        print(f"{Fore.RED}[ERROR]{Style.RESET_ALL} Unexpected error: {e}")
 
-# Display final summary
-display_final_summary() {
-    local js_count=$(find "$RESULTS_DIR/js_files" -name "*.js" | wc -l)
-    
-    echo -e "${CYAN}📊 Scan Results Summary:${NC}"
-    echo -e "${CYAN}├─${NC} Results Directory: $RESULTS_DIR"
-    echo -e "${CYAN}├─${NC} JavaScript Files: $js_count"
-    echo -e "${CYAN}├─${NC} Final Report: jshawk_final_report.txt"
-    
-    if [ -f "$RESULTS_DIR/findings/secrets.txt" ] && [ -s "$RESULTS_DIR/findings/secrets.txt" ]; then
-        local secret_count=$(wc -l < "$RESULTS_DIR/findings/secrets.txt")
-        echo -e "${CYAN}└─${NC} Security Issues: ${RED}$secret_count found${NC}"
-        
-        echo ""
-        echo -e "${RED}🚨 SECURITY ALERT:${NC}"
-        echo -e "${YELLOW}$secret_count potential security issues detected!${NC}"
-        
-        echo ""
-        echo -e "${GREEN}📋 Quick Actions:${NC}"
-        echo -e "  • Review: ${CYAN}cat $RESULTS_DIR/findings/summary.txt${NC}"
-        echo -e "  • Details: ${CYAN}cat $RESULTS_DIR/reports/detailed_analysis.txt${NC}"
-        echo -e "  • Raw Data: ${CYAN}cat $RESULTS_DIR/findings/secrets.txt${NC}"
-        
-        echo ""
-        echo -e "${YELLOW}🔍 Top Findings:${NC}"
-        head -5 "$RESULTS_DIR/findings/secrets.txt" | while IFS='|' read -r type secret file url line; do
-            if [ ${#secret} -lt 50 ]; then
-                echo -e "  ${RED}[$type]${NC} $secret"
-            else
-                echo -e "  ${RED}[$type]${NC} ${secret:0:40}..."
-            fi
-        done
-        
-    else
-        echo -e "${CYAN}└─${NC} Security Issues: ${GREEN}0 found${NC}"
-        echo ""
-        echo -e "${GREEN}✅ CLEAN SCAN COMPLETED${NC}"
-        echo -e "No security credentials detected in JavaScript files."
-    fi
-    
-    echo ""
-    echo -e "${BLUE}🦅 JSHawk scan completed successfully!${NC}"
-    echo -e "${CYAN}📁 All results saved to: $RESULTS_DIR${NC}"
-}
-
-# Initialize and run
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+if __name__ == "__main__":
+    main()
