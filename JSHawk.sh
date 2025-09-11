@@ -3,7 +3,7 @@
 # JSHawk v1.0 - Advanced JavaScript Security Scanner
 # Context-Aware Credential Detection with Custom Regex Support
 # Author: Security Research Team
-# GitHub: https://github.com/yourusername/jshawk
+# GitHub: https://github.com/Mah3Sec/jshawk
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
