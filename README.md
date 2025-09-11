@@ -277,8 +277,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 📞 Support
 
 - 📧 **Issues**: [GitHub Issues](https://github.com/yourusername/jshawk/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/yourusername/jshawk/discussions)
-- 🐦 **Twitter**: [@yourusername](https://twitter.com/yourusername)
+- 🐦 **Twitter**: [@mah3sec](https://twitter.com/mah3sec)
 
 ---
 
