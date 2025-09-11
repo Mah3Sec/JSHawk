@@ -58,32 +58,32 @@ git clone https://github.com/Mah3Sec/JSHawk.git
 cd JSHawk
 
 # Make executable
-chmod +x jshawk.sh
+chmod +x JSHawk.sh
 
 # Optional: Add to PATH
-sudo cp jshawk.sh /usr/local/bin/jshawk
+sudo cp JSHawk.sh /usr/local/bin/JSHawk
 ```
 
 ## 📖 Usage
 
 ### Basic Scan
 ```bash
-./jshawk.sh example.com
+./JSHawk.sh example.com
 ```
 
 ### Advanced Options
 ```bash
 # Scan with subdomain list
-./jshawk.sh example.com --subdomains subdomains.txt
+./JSHawk.sh example.com --subdomains subdomains.txt
 
 # Custom output directory
-./jshawk.sh example.com --output my_results
+./JSHawk.sh example.com --output my_results
 
 # Verbose mode with custom threads
-./jshawk.sh example.com --verbose --threads 20
+./JSHawk.sh example.com --verbose --threads 20
 
 # Add custom regex patterns
-./jshawk.sh example.com --custom-regex
+./JSHawk.sh example.com --custom-regex
 ```
 
 ### Command Line Options
@@ -105,7 +105,7 @@ JSHawk supports custom regex patterns for organization-specific credentials:
 ### Adding Custom Patterns
 ```bash
 # Interactive setup
-./jshawk.sh --custom-regex
+./JSHawk.sh --custom-regex
 
 # Manual configuration
 echo "CUSTOM_API|secret_key_[a-zA-Z0-9]{32}|Custom API Key Pattern" >> ~/.jshawk/custom_patterns.txt
@@ -229,14 +229,14 @@ Found a bug? Please create an issue with:
 ```bash
 # Scan multiple domains
 echo -e "example.com\ntest.com\ndemo.com" | while read domain; do
-    ./jshawk.sh "$domain" --output "batch_scan_$(date +%Y%m%d)"
+    ./JSHawk.sh "$domain" --output "batch_scan_$(date +%Y%m%d)"
 done
 ```
 
 ### Integration with Other Tools
 ```bash
 # Combine with subfinder
-subfinder -d example.com | ./jshawk.sh example.com --subdomains /dev/stdin
+subfinder -d example.com | ./JSHawk.sh example.com --subdomains /dev/stdin
 
 # Parse results with jq (if output is JSON)
 cat results/findings/secrets.txt | grep "AWS_" | cut -d'|' -f2
@@ -245,10 +245,10 @@ cat results/findings/secrets.txt | grep "AWS_" | cut -d'|' -f2
 ### Automation Examples
 ```bash
 # Daily security scan
-0 2 * * * /usr/local/bin/jshawk example.com --output /var/security/daily_scans/
+0 2 * * * /usr/local/bin/JSHawk example.com --output /var/security/daily_scans/
 
 # CI/CD Integration
-./jshawk.sh $CI_COMMIT_REF_NAME.staging.example.com --output security_scan
+./JSHawk.sh $CI_COMMIT_REF_NAME.staging.example.com --output security_scan
 if [ -s security_scan/findings/secrets.txt ]; then
     echo "❌ Security issues found, failing build"
     exit 1
