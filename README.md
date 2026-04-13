@@ -1,349 +1,322 @@
-# JSHawk - Advanced JavaScript Security Scanner
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Bash](https://img.shields.io/badge/Language-Bash-green.svg)](https://www.gnu.org/software/bash/)
-[![Version](https://img.shields.io/badge/Version-1.1-blue.svg)](https://github.com/Mah3Sec/JSHawk/releases/latest)
-
-**JSHawk** is a powerful, context-aware JavaScript security scanner with source map support that hunts for exposed credentials, API keys, and sensitive information in both minified JavaScript files and their original source code.
-
-## Latest Update - v1.1
-
-**NEW: Source Map Support Added!**
-- Automatically discovers and analyzes JavaScript source maps
-- Extracts secrets from original unminified source code  
-- Enhanced detection of credentials hidden in readable code
-- [Download v1.1](https://github.com/Mah3Sec/JSHawk/releases/latest)
-
-## Features
-
-### Context-Aware Detection
-- **Smart Pattern Matching**: Only flags credentials that appear in proper configuration context
-- **False Positive Reduction**: Advanced filtering to minimize noise
-- **Multi-Pattern Support**: Detects 20+ credential types with high accuracy
-
-### Advanced Capabilities
-- **Custom Regex Support**: Add your own detection patterns
-- **Parallel Processing**: Multi-threaded downloads for speed
-- **Organized Results**: Clean directory structure with detailed reports
-- **Comprehensive Coverage**: Discovers JS files through multiple methods
-
-### Source Map Analysis
-- **Automatic Discovery**: Finds .js.map files for every JavaScript file
-- **Inline Source Map Extraction**: Decodes base64 encoded source maps
-- **Original Code Analysis**: Analyzes unminified source code for better detection
-- **Enhanced Pattern Matching**: More effective on readable variable names and comments
-
-## Why Source Maps Matter
-
-Source maps are files that map minified JavaScript back to original source code. They often contain:
-- **Original variable names** instead of minified `a`, `b`, `c`
-- **Developer comments** with TODOs and potential credentials  
-- **Readable code structure** for better pattern matching
-- **Internal configurations** accidentally exposed
-
-JSHawk automatically discovers and analyzes both external `.js.map` files and inline base64-encoded source maps embedded in JavaScript files.
-
-## Supported Credential Types
-
-### Cloud & Infrastructure
-- AWS Access Keys (AKIA pattern)
-- AWS Secret Keys (40-char base64)
-- Google API Keys (AIza pattern)
-- Azure Storage Keys
-- Firebase Database URLs
-
-### Development & CI/CD
-- GitHub Personal Access Tokens
-- GitLab Access Tokens
-- Jenkins API Tokens
-
-### Communication & Payment
-- Slack Bot Tokens (xoxb, xoxa, xoxp, xoxr)
-- Stripe Live Keys (sk_live, pk_live)
-- SendGrid API Keys
-- Twilio Account SID/Auth Tokens
-
-### Database & Security
-- Database Connection Strings (MySQL, PostgreSQL, MongoDB, Redis)
-- JWT Secrets
-- Private SSH/TLS Keys
-- Generic API Keys (with context validation)
-
-### Custom Patterns
-- User-defined regex patterns
-- Flexible pattern management
-- Custom descriptions and categorization
-
-## Installation
-
-### Latest Release (Recommended)
-```bash
-# Download latest version
-curl -L https://github.com/Mah3Sec/JSHawk/releases/latest/download/JSHawk.sh -o JSHawk.sh
-chmod +x JSHawk.sh
-```
-
-### Development Version
-```bash
-# Clone the repository
-git clone https://github.com/Mah3Sec/JSHawk.git
-cd JSHawk
-chmod +x JSHawk.sh
-
-# Optional: Add to PATH
-sudo cp JSHawk.sh /usr/local/bin/JSHawk
-```
-
-## Usage
-
-### Basic Scan
-```bash
-./JSHawk.sh example.com
-```
-
-### Advanced Options
-```bash
-# Scan with subdomain list
-./JSHawk.sh example.com --subdomains subdomains.txt
-
-# Custom output directory
-./JSHawk.sh example.com --output my_results
-
-# Verbose mode with custom threads
-./JSHawk.sh example.com --verbose --threads 20
-
-# Add custom regex patterns
-./JSHawk.sh example.com --custom-regex
-```
-
-### Command Line Options
-
-| Option | Description |
-|--------|-------------|
-| `-s, --subdomains <file>` | Use subdomain list from file |
-| `-c, --custom-regex` | Add custom regex patterns interactively |
-| `-l, --list-patterns` | List all available detection patterns |
-| `-o, --output <dir>` | Custom output directory |
-| `-t, --threads <num>` | Number of concurrent downloads (default: 10) |
-| `-v, --verbose` | Enable verbose output |
-| `-h, --help` | Show help message |
-
-## Custom Patterns
-
-JSHawk supports custom regex patterns for organization-specific credentials:
-
-### Adding Custom Patterns
-```bash
-# Interactive setup
-./JSHawk.sh --custom-regex
-
-# Manual configuration
-echo "CUSTOM_API|secret_key_[a-zA-Z0-9]{32}|Custom API Key Pattern" >> ~/.jshawk/custom_patterns.txt
-```
-
-### Pattern Format
-```
-PATTERN_NAME|regex_pattern|description
-```
-
-### Examples
-```
-ACME_API|acme_[a-zA-Z0-9]{24}|ACME Corporation API Keys
-INTERNAL_TOKEN|int_tok_[0-9a-f]{40}|Internal Service Tokens
-LEGACY_KEY|legacy_[A-Z0-9]{16}|Legacy System Keys
-```
-
-## Output Structure
-
-JSHawk creates an organized results directory:
+<div align="center">
 
 ```
-jshawk_results/
-├── example.com_20241201_143022/
-│   ├── js_files/                    # Downloaded JavaScript files
-│   │   ├── js_file_0001.js         # Regular JS files
-│   │   ├── sourcemap_0001.js.map   # Source map files
-│   │   └── inline_sourcemap_*.map  # Extracted inline source maps
-│   ├── findings/
-│   │   ├── secrets.txt             # Raw findings (CSV format)
-│   │   ├── sourcemap_secrets.txt   # Source map specific findings
-│   │   └── summary.txt             # Executive summary
-│   ├── reports/
-│   │   └── detailed_analysis.txt   # Comprehensive analysis
-│   ├── logs/                       # Scan logs
-│   ├── scan_info.txt              # Scan metadata
-│   └── jshawk_final_report.txt    # Final comprehensive report
+     ██╗███████╗██╗  ██╗ █████╗ ██╗    ██╗██╗  ██╗
+     ██║██╔════╝██║  ██║██╔══██╗██║    ██║██║ ██╔╝
+     ██║███████╗███████║███████║██║ █╗ ██║█████╔╝
+██   ██║╚════██║██╔══██║██╔══██║██║███╗██║██╔═██╗
+╚█████╔╝███████║██║  ██║██║  ██║╚███╔███╔╝██║  ██╗
+ ╚════╝ ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚══╝╚══╝ ╚═╝  ╚═╝
 ```
 
-## Sample Output
+**JavaScript Secret Scanner · v3.0**
 
-```bash
-JSHawk - Advanced JavaScript Security Scanner
-═══════════════════════════════════════════════
+[![Bash](https://img.shields.io/badge/Shell-Bash-green?style=flat-square)](https://www.gnu.org/software/bash/)
+[![License](https://img.shields.io/badge/License-MIT-red?style=flat-square)](LICENSE)
+[![Author](https://img.shields.io/badge/Author-@Mah3Sec-CC0000?style=flat-square)](https://github.com/Mah3Sec)
 
-[DISCOVERY] Processing: https://example.com
-[SUCCESS] Downloaded 15,234 bytes
-[FOUND] 12 unique JS files
+*Context-aware credential detection · Entropy scoring · JS chain discovery · Endpoint probing · SARIF/HTML/Nuclei output*
 
-[SOURCEMAP] Discovering source maps for: https://example.com
-[SOURCEMAP-FOUND] 8 potential source map files
-
-[DOWNLOAD] Starting parallel downloads (threads: 10)...
-[DOWNLOAD COMPLETE] Success: 8, Failed: 4
-[SOURCEMAP-SUCCESS] sourcemap_0001.js.map (45,123 bytes)
-[INLINE-SUCCESS] Extracted from js_file_0003.js
-
-[ANALYZE] Enhanced credential detection...
-[AWS-ACCESS] AKIAIOSFODNN7EXAMPLE
-[GITHUB] ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-[SOURCEMAP-SECRETS] Found 2 secrets in source maps!
-[SOURCEMAP_AWS-ACCESS] AKIAIOSFODNN7EXAMPLE
-[SOURCEMAP_GITHUB] ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-
-╔══════════════════════════════════════════════════════════════╗
-║                  JSHAWK SCAN COMPLETE                        ║
-╚══════════════════════════════════════════════════════════════╝
-
-SECURITY ALERT: 5 potential security issues detected!
-(2 from source maps)
-
-Top Findings:
-  [AWS_ACCESS_KEY] AKIAIOSFODNN7EXAMPLE
-  [GITHUB_TOKEN] ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-  [SOURCEMAP_AWS_ACCESS_KEY] AKIAIOSFODNN7EXAMPLE
-```
-
-## Security Risk Assessment
-
-JSHawk categorizes findings by risk level:
-
-- **CRITICAL**: AWS keys, Stripe live keys, database URLs, private keys
-- **HIGH**: GitHub tokens, Google API keys, Slack tokens
-- **MEDIUM**: Generic API keys, JWT secrets
-- **CUSTOM**: User-defined patterns
-- **SOURCE MAP**: Findings specifically from source map analysis
-
-## Configuration
-
-### User Configuration Directory
-JSHawk stores configuration in `~/.jshawk/`:
-- `custom_patterns.txt`: Custom regex patterns
-- Configuration files and user preferences
-
-### Environment Variables
-```bash
-export JSHAWK_THREADS=20          # Default thread count
-export JSHAWK_TIMEOUT=30          # Download timeout
-export JSHAWK_OUTPUT_DIR="./scans" # Default output directory
-```
-
-## Contributing
-
-We welcome contributions! Here's how you can help:
-
-1. **Fork the repository**
-2. **Create a feature branch**: `git checkout -b feature/amazing-feature`
-3. **Add your changes**
-4. **Write tests** (if applicable)
-5. **Commit your changes**: `git commit -m 'Add amazing feature'`
-6. **Push to branch**: `git push origin feature/amazing-feature`
-7. **Open a Pull Request**
-
-### Contributing Ideas
-- New credential detection patterns
-- Source map parsing improvements
-- Performance optimizations
-- Additional output formats (JSON, XML)
-- Integration with security tools
-- Docker support
-- CI/CD pipeline integration
-
-## Bug Reports
-
-Found a bug? Please create an issue with:
-- JSHawk version
-- Operating system
-- Command used
-- Expected vs actual behavior
-- Sample output (sanitized)
-
-## Advanced Usage
-
-### Batch Scanning
-```bash
-# Scan multiple domains
-echo -e "example.com\ntest.com\ndemo.com" | while read domain; do
-    ./JSHawk.sh "$domain" --output "batch_scan_$(date +%Y%m%d)"
-done
-```
-
-### Integration with Other Tools
-```bash
-# Combine with subfinder
-subfinder -d example.com | ./JSHawk.sh example.com --subdomains /dev/stdin
-
-# Parse results
-cat results/findings/secrets.txt | grep "AWS_" | cut -d'|' -f2
-
-# Check for source map findings specifically
-grep "SOURCEMAP_" results/findings/secrets.txt
-```
-
-### Automation Examples
-```bash
-# Daily security scan
-0 2 * * * /usr/local/bin/JSHawk example.com --output /var/security/daily_scans/
-
-# CI/CD Integration
-./JSHawk.sh $CI_COMMIT_REF_NAME.staging.example.com --output security_scan
-if [ -s security_scan/findings/secrets.txt ]; then
-    echo "Security issues found, failing build"
-    exit 1
-fi
-```
-
-## Updating from v1.0
-
-If you're using JSHawk v1.0, update to v1.1 for source map support:
-
-```bash
-# Backup current version
-cp JSHawk.sh JSHawk_v1.0_backup.sh
-
-# Download latest version
-curl -L https://github.com/Mah3Sec/JSHawk/releases/latest/download/JSHawk.sh -o JSHawk.sh
-chmod +x JSHawk.sh
-
-# Verify version
-./JSHawk.sh --help | grep "v1.1"
-```
-
-## Legal Disclaimer
-
-**JSHawk is intended for authorized security testing only.**
-
-- Only scan domains you own or have explicit permission to test
-- Respect rate limits and terms of service
-- Use responsibly and ethically
-- The authors are not responsible for misuse
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- Inspired by various security research tools
-- Built for the security community
-- Thanks to all contributors and users
-
-## Support
-
-- **Issues**: [GitHub Issues](https://github.com/Mah3Sec/jshawk/issues)
-- **Twitter**: [@mah3sec](https://twitter.com/mah3sec)
+</div>
 
 ---
 
-**Made with ❤️ for the security community**
+## What is JSHawk?
 
-*Hunt smarter, not harder*
+JSHawk is an advanced JavaScript security scanner for bug bounty hunters and penetration testers. It downloads and deeply analyzes JavaScript files from a target domain, detecting exposed credentials, API keys, database URLs, private keys, and other secrets using 60+ patterns with Shannon entropy scoring to eliminate false positives.
+
+**Two tools, one mission:**
+
+| Tool | Description |
+|---|---|
+| `JSHawk.sh` | Bash CLI — deep recon, Wayback, source maps, endpoint probing |
+| Browser Extension | Real-time passive scanning as you browse, with endpoint probing |
+
+---
+
+## Features we offer
+
+### JS Chain Discovery
+When JSHawk fetches `app.js` and finds `/beam.js`, `/chunk.abc.js`, or `import('./auth')` inside it — it **automatically fetches and scans those too**, recursively, up to 3 levels deep. Webpack chunk manifests are parsed to reconstruct all lazy-loaded module URLs. Most tools only scan the JS files linked directly from HTML.
+
+### Context-Aware Scoring
+Every finding is scored not just by entropy, but by its **surrounding code context**. A secret inside a `config = { ... }` block or `production` environment object is rated `critical`. The same value inside a comment tagged `// example` or `// TODO` is suppressed. No other open-source JS scanner does context scoring.
+
+### Endpoint Probing with Session Auth
+JSHawk extracts API routes from JS (`/api/v1/users`, `/graphql`, `fetch('/admin/...')`) and **fetches each one using your actual session cookies**, then scans the JSON responses for leaked secrets. Authenticated endpoints that return real data get scanned — not just the JS source.
+
+### Diff Mode — Only New Findings
+`--diff` compares current scan against `~/.jshawk/fingerprints.db` (SHA-256 hashes of all previously seen secrets) and **only reports secrets it has never seen before**. Essential for daily CI/CD scanning without alert fatigue.
+
+### False Positive Management
+`--fp-add <value>` permanently marks a value as a known-safe false positive. It is silently suppressed in every future scan, forever. Maintain your own per-company exclusion list.
+
+### SARIF 2.1.0 Output
+Structured results in SARIF format — plug directly into **GitHub Code Scanning**, **GitLab SAST**, or any SARIF-compatible CI pipeline. No glue code needed.
+
+### HTML Report
+Self-contained single-file HTML report with dark theme, sortable findings table, entropy scores, and clickable source URLs. Share with clients or include in pentest reports.
+
+### Nuclei Template Export
+Every finding becomes a **ready-to-use Nuclei template YAML** targeting the specific pattern that was found. Feed them straight into `nuclei -t jshawk_results/nuclei/` to re-verify at scale.
+
+---
+
+## Installation
+
+```bash
+# Clone
+git clone https://github.com/Mah3Sec/JSHawk.git
+cd JSHawk
+
+# Make executable
+chmod +x JSHawk.sh
+
+# Optional: install globally
+sudo ln -s "$(pwd)/JSHawk.sh" /usr/local/bin/jshawk
+
+# Verify
+jshawk --help
+```
+
+**Dependencies:** `bash`, `curl`, `python3` (for source maps + HTML report), `awk`, `grep`
+
+---
+
+## Quick Start
+
+```bash
+# Basic scan
+jshawk target.com
+
+# Full recon — Wayback + source maps + live validation + HTML report
+jshawk target.com --wayback --source-maps --validate --html
+
+# CI/CD — only new findings, SARIF output, exit 1 if found
+jshawk target.com --diff --sarif --quiet
+
+# Bug bounty — subdomain list + scope control + wordlist for ffuf
+jshawk target.com -s subdomains.txt --scope scope.txt --wordlist --threads 30
+
+# Authenticated endpoint probing
+jshawk target.com --probe-endpoints --probe-cookies cookies.txt
+
+# Export everything for further tooling
+jshawk target.com --nuclei --wordlist --format json
+```
+
+---
+
+## All Flags
+
+### Targeting
+| Flag | Description |
+|---|---|
+| `<domain>` | Target domain or full URL |
+| `-s, --subdomains FILE` | File of subdomains/URLs (one per line) |
+| `--scope FILE` | Only scan URLs matching patterns in this file |
+
+### Discovery
+| Flag | Default | Description |
+|---|---|---|
+| `--deep-crawl` | on | Follow JS refs inside JS files (chain discovery) |
+| `--chain-depth N` | 3 | How many levels deep to follow JS→JS refs |
+| `--wayback` | off | Query Wayback Machine for historical JS snapshots |
+| `--source-maps` | off | Download `.map` files and reconstruct original source |
+| `--no-deep-crawl` | — | Disable chain discovery (faster) |
+
+### Detection
+| Flag | Default | Description |
+|---|---|---|
+| `-e, --entropy N` | 3.5 | Entropy threshold — below this = placeholder, skipped |
+| `--context` | on | Context-aware scoring (suppresses test/example values) |
+| `--no-context` | — | Report everything regardless of context |
+| `-c, --custom-regex` | — | Add custom patterns interactively |
+| `-l, --list-patterns` | — | List all built-in patterns |
+
+### Endpoint Probing
+| Flag | Description |
+|---|---|
+| `--probe-endpoints` | Fetch discovered API routes and scan responses |
+| `--probe-cookies FILE` | Session cookies file for authenticated probing |
+| `--probe-headers FILE` | Auth headers file (e.g. `Authorization: Bearer ...`) |
+
+### Validation
+| Flag | Description |
+|---|---|
+| `--validate` | Live-confirm findings via provider APIs (AWS, GitHub, Stripe, OpenAI) |
+
+### Output
+| Flag | Description |
+|---|---|
+| `-o, --output DIR` | Output directory (default: `jshawk_results/`) |
+| `--format FORMAT` | `txt` \| `json` \| `both` \| `sarif` \| `html` |
+| `--sarif` | SARIF 2.1.0 output for GitHub/GitLab CI |
+| `--html` | Self-contained HTML report |
+| `--wordlist` | Export discovered endpoints as wordlist |
+| `--nuclei` | Export findings as Nuclei template YAML |
+| `--silent` | Machine-readable output only |
+| `-q, --quiet` | Suppress all non-finding output |
+| `--no-color` | Disable colors (for log files) |
+| `-v, --verbose` | Show context lines and debug info |
+
+### Performance
+| Flag | Default | Description |
+|---|---|---|
+| `-t, --threads N` | 15 | Parallel download threads |
+| `--rate-limit MS` | 0 | Delay between requests in milliseconds |
+| `--resume` | off | Resume an interrupted scan |
+
+### Diff & False Positives
+| Flag | Description |
+|---|---|
+| `--diff` | Only report findings not seen in previous scans |
+| `--fp-add SECRET` | Mark a value as a false positive (suppressed forever) |
+| `--fp-list` | List all known false positives |
+| `--fp-clear` | Clear all false positives |
+
+### Proxy & Auth
+| Flag | Description |
+|---|---|
+| `--proxy URL` | HTTP/SOCKS5 proxy (e.g. Burp Suite: `http://127.0.0.1:8080`) |
+| `--header "K: V"` | Add custom request header (repeatable) |
+| `--insecure` | Disable TLS verification |
+
+---
+
+## Detection Patterns (60+)
+
+| Category | Patterns |
+|---|---|
+| **Cloud** | AWS Access Key, AWS Secret Key, Google API Key, Azure Storage Key, Azure Connection String, Firebase URL + API Key, GCP Service Account, DigitalOcean Token, Heroku API Key |
+| **VCS / CI-CD** | GitHub Token, GitHub PAT, GitLab Token, npm Token, Jenkins Token, Travis CI Token, CircleCI Token |
+| **Payment** | Stripe Live Secret, Stripe Live Public, Stripe Restricted Key, PayPal Client, Braintree Key, Shopify Admin Token, Shopify API Secret, Square Access Token |
+| **Communication** | Slack Bot/User/App Token, Slack Webhook, SendGrid Key, Twilio SID, Twilio Auth Token, Mailgun Key, Mailchimp Key, Discord Bot Token, Discord Webhook, Telegram Bot Token |
+| **AI Providers** | OpenAI API Key, Anthropic API Key, HuggingFace Token, Replicate API Key |
+| **Database** | Database URL (MySQL/Postgres/MongoDB/Redis/AMQP), Hardcoded DB Password |
+| **Secrets** | JWT Token, JWT Secret, Private Key (PEM), SSH Private Key, Encryption Key, Hardcoded Password, Generic API Key, Generic Secret Key |
+| **Network** | Internal IP (10.x/192.168.x/172.16-31.x), Private Subnet CIDR, Basic Auth in URL, S3 Bucket URL |
+| **Auth** | Auth0 Client Secret, Okta API Token, OAuth Client Secret, Mapbox Token |
+| **Monitoring** | Sentry DSN, Datadog API Key, New Relic License Key, Amplitude API Key |
+| **Custom** | User-defined patterns via `--custom-regex` or `~/.jshawk/custom_patterns.txt` |
+
+All patterns are gated by **Shannon entropy ≥ 3.5** (configurable) so placeholder values like `YOUR_KEY_HERE`, `xxxxxxxxxxxx`, `00000000000` are never reported.
+
+---
+
+## Output Structure
+
+```
+jshawk_results/target.com_20240415_143022/
+├── scan_info.json              # Scan metadata
+├── js_files/                   # All downloaded JS files
+├── findings/
+│   └── secrets.txt             # Pipe-delimited findings (TYPE|SECRET|FILE|URL|LINE|RISK|ENTROPY|CONTEXT)
+├── endpoints/
+│   ├── discovered_paths.txt    # All API routes found in JS
+│   └── probe_results.txt       # HTTP status codes from endpoint probing
+├── source_maps/                # Reconstructed original source files
+├── reports/
+│   ├── jshawk.json             # Structured JSON report
+│   ├── jshawk.sarif            # SARIF 2.1.0 for CI/CD
+│   ├── jshawk_report.html      # Self-contained HTML report
+│   └── endpoints_wordlist.txt  # Endpoints for ffuf/dirsearch
+├── nuclei/                     # Nuclei template YAML per finding
+└── logs/                       # Download logs and debug info
+```
+
+---
+
+## CI/CD Integration
+
+```yaml
+# GitHub Actions
+- name: JSHawk JS Secret Scan
+  run: |
+    chmod +x JSHawk.sh
+    ./JSHawk.sh ${{ env.TARGET }} --diff --sarif --quiet
+  continue-on-error: true
+
+- name: Upload SARIF
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: jshawk_results/*/reports/jshawk.sarif
+```
+
+```bash
+# GitLab CI
+jshawk_scan:
+  script:
+    - jshawk $TARGET --diff --sarif --quiet
+  artifacts:
+    reports:
+      sast: jshawk_results/*/reports/jshawk.sarif
+```
+
+**Exit codes:**
+- `0` — Clean, no findings
+- `1` — Findings detected
+- `2` — Scan error
+
+---
+
+## Browser Extension
+
+The JSHawk browser extension brings real-time secret scanning to Chrome and Firefox.
+
+**Install:** Load unpacked from `extension/` folder in `chrome://extensions`
+
+**Features:**
+- Passive auto-scan — every JS file that loads gets scanned automatically
+- On-demand SCAN button — deep scan all JS on the current page
+- JS chain discovery — follows `/beam.js`, webpack chunks, lazy imports
+- Endpoint probing — fetches API routes **with your session cookies**
+- 65+ patterns with entropy scoring
+- Custom signatures saved permanently
+- Session-persistent findings (survive service worker restarts)
+- SARIF/JSON export + one-click bug bounty Markdown reports
+
+**Screenshots:**
+
+| Findings | Endpoints | Patterns |
+|---|---|---|
+| Real-time critical/high/medium findings with source URLs | API routes with HTTP status + LEAKED badge | 65+ built-in patterns + custom regex editor |
+
+---
+
+## Compared to alternatives
+
+| Feature | JSHawk v3 | SecretFinder | LinkFinder | truffleHog |
+|---|---|---|---|---|
+| JS chain discovery | ✅ 3 levels deep | ❌ | ❌ | ❌ |
+| Context-aware scoring | ✅ | ❌ | ❌ | Partial |
+| Endpoint probing | ✅ with auth | ❌ | ❌ | ❌ |
+| Wayback Machine | ✅ | ❌ | ❌ | ❌ |
+| Source map recon | ✅ | ❌ | ❌ | ❌ |
+| Diff mode | ✅ | ❌ | ❌ | ✅ |
+| SARIF output | ✅ | ❌ | ❌ | ✅ |
+| HTML report | ✅ | ❌ | ❌ | ❌ |
+| Nuclei export | ✅ | ❌ | ❌ | ❌ |
+| False positive mgmt | ✅ | ❌ | ❌ | Partial |
+| Browser extension | ✅ | ❌ | ❌ | ❌ |
+| No Python req | ✅ (pure bash) | ❌ | ❌ | ❌ |
+
+---
+
+## Legal
+
+For **authorized security testing only**. You are responsible for ensuring you have permission to test any system you scan. JSHawk is provided as-is for educational and professional security research purposes.
+
+---
+
+## Author
+
+**Mahendra Purbia** ([@Mah3Sec](https://github.com/Mah3Sec))
+
+If JSHawk helped you find a bug, a shoutout or a star is appreciated.
+
+---
+
+<div align="center">
+<sub>Built for the community · MIT License</sub>
+</div>
