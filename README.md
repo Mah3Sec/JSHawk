@@ -30,7 +30,7 @@ JSHawk is an advanced JavaScript security scanner for bug bounty hunters and pen
 | Tool | Description |
 |---|---|
 | `JSHawk.sh` | Bash CLI — deep recon, Wayback, source maps, endpoint probing |
-| Browser Extension | Real-time passive scanning as you browse, with endpoint probing |
+| Browser Extension (In Review) | Real-time passive scanning as you browse, with endpoint probing |
 
 ---
 
