@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# JSHawk v3.0 - Advanced JavaScript Secret Scanner
+# JSHawk v3.1 - Advanced JavaScript Secret Scanner
 # Author: Mahendra Purbia (@Mah3Sec)
 # GitHub: https://github.com/Mah3Sec/JSHawk
 # For authorized security testing only
@@ -20,7 +20,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Config
-readonly VERSION="3.0"
+readonly VERSION="3.1"
 readonly CONFIG_DIR="$HOME/.jshawk"
 readonly CUSTOM_REGEX_FILE="$CONFIG_DIR/custom_patterns.txt"
 readonly FINGERPRINT_DB="$CONFIG_DIR/fingerprints.db"
@@ -149,7 +149,6 @@ mark_known() {
 context_risk_score() {
     local secret="$1" context="$2"
     local base_risk="medium"
-    local sec8="${secret:0:8}"
 
     if echo "$context" | grep -qiE "(key|secret|token|pass|credential|auth|api|access)[[:space:]]*[:=]" 2>/dev/null; then
         base_risk="high"
@@ -299,7 +298,7 @@ show_help() {
     echo ""
     echo -e "${BOLD}OUTPUT${NC}"
     echo "  -o, --output DIR         Output directory [default: jshawk_results/]"
-    echo "  --format FORMAT          txt|json|both [default: txt]"
+    echo "  --format FORMAT          txt|json|both|sarif|html [default: txt]"
     echo "  --sarif                  SARIF 2.1.0 for GitHub/GitLab CI"
     echo "  --html                   Self-contained HTML report"
     echo "  --wordlist               Export endpoints as wordlist"
@@ -337,6 +336,7 @@ show_help() {
     echo "  jshawk target.com --diff --sarif --quiet"
     echo "  jshawk target.com --probe-endpoints --probe-cookies cookies.txt"
     echo "  jshawk target.com -s subs.txt --scope scope.txt --wordlist"
+    echo "  jshawk target.com --nuclei --wordlist --format json"
 }
 
 # Argument parsing
@@ -418,14 +418,33 @@ setup_custom_regex() {
 list_patterns() {
     echo -e "${CYAN}${BOLD}JSHawk v${VERSION} Detection Patterns${NC}"
     echo ""
-    echo -e "  ${RED}Critical:${NC} AWS Keys, Azure Storage, DB URLs, Stripe Live, Private Keys, SSH Keys, Auth0, Twilio Auth"
-    echo -e "  ${YELLOW}High:${NC}     GitHub/GitLab Tokens, OpenAI, Anthropic, HuggingFace, Replicate, Slack, SendGrid, Shopify"
-    echo -e "  ${YELLOW}High:${NC}     Firebase, Google API, Heroku, npm Token, Jenkins, Mailgun, Mailchimp, Discord, Telegram"
-    echo -e "  ${BLUE}Medium:${NC}   JWT Token, JWT Secret, Internal IPs, Generic API Key, S3 Bucket, Sentry DSN, Mapbox, Okta"
+    echo -e "  ${RED}Critical:${NC}"
+    echo -e "    AWS Access Key, AWS Secret Key, Azure Storage Key, Azure Connection String"
+    echo -e "    Database URLs (MySQL/Postgres/MongoDB/Redis/AMQP), Stripe Live Keys"
+    echo -e "    Private Key (PEM), SSH Private Key, Twilio Auth Token, Auth0 Client Secret"
+    echo -e "    Heroku API Key, PayPal Client Secret, Braintree Key, Square Access Token"
     echo ""
-    local cpcount=0; [[ -f "$CUSTOM_REGEX_FILE" ]] && cpcount=$(wc -l < "$CUSTOM_REGEX_FILE" 2>/dev/null || echo 0)
+    echo -e "  ${YELLOW}High:${NC}"
+    echo -e "    GitHub Token + PAT, GitLab Token, npm Token, Jenkins Token"
+    echo -e "    Travis CI Token, CircleCI Token"
+    echo -e "    OpenAI Key, Anthropic Key, HuggingFace Token, Replicate Key"
+    echo -e "    Slack Bot/User/App Token, Slack Webhook, SendGrid Key"
+    echo -e "    Shopify Admin Token, Shopify API Secret, Discord Bot Token, Discord Webhook"
+    echo -e "    Telegram Bot Token, Mailgun Key, Mailchimp Key"
+    echo -e "    Firebase URL + API Key, Google API Key, GCP Service Account"
+    echo -e "    DigitalOcean Token, Datadog API Key, New Relic License Key"
+    echo ""
+    echo -e "  ${BLUE}Medium:${NC}"
+    echo -e "    JWT Token, JWT Secret, Hardcoded Password, Generic API Key, Generic Secret Key"
+    echo -e "    Internal IP, Private Subnet CIDR, Basic Auth in URL, S3 Bucket URL"
+    echo -e "    Sentry DSN, Mapbox Token, Okta Token, OAuth Client Secret"
+    echo -e "    Amplitude API Key, Encryption Key"
+    echo ""
+    local cpcount=0
+    [[ -f "$CUSTOM_REGEX_FILE" ]] && cpcount=$(wc -l < "$CUSTOM_REGEX_FILE" 2>/dev/null || echo 0)
     echo -e "  ${PURPLE}Custom:${NC} $cpcount patterns in $CUSTOM_REGEX_FILE"
     echo ""
+    echo -e "  ${DIM}Total built-in patterns: 65+${NC}"
     echo -e "  ${DIM}All patterns filtered by Shannon entropy >= $ENTROPY_THRESHOLD${NC}"
     echo -e "  ${DIM}Context-aware scoring suppresses test/placeholder values${NC}"
 }
@@ -470,22 +489,32 @@ init_scan() {
     SECRETS_TEMP="${RESULTS_DIR}/.secrets_tmp_$$"
     > "$SECRETS_TEMP"
 
-    # Write scan metadata
-    cat > "${RESULTS_DIR}/scan_info.txt" << INFOEOF
-JSHawk v${VERSION} Security Scan
-================================
-Domain:        $CLEAN_DOMAIN
-Base URL:      $BASE_URL
-Started:       $(date)
-Entropy:       >= $ENTROPY_THRESHOLD
-Threads:       $THREADS
-Deep crawl:    $DEEP_CRAWL (depth $CHAIN_DEPTH)
-Wayback:       $WAYBACK
-Source maps:   $SOURCE_MAPS
-Validate:      $VALIDATE
-Endpoint probe:$ENDPOINT_PROBE
-Diff mode:     $DIFF_MODE
-INFOEOF
+    # Write scan metadata as JSON
+    python3 - "${RESULTS_DIR}/scan_info.json" "$CLEAN_DOMAIN" "$BASE_URL" "$VERSION" \
+        "$ENTROPY_THRESHOLD" "$THREADS" "$DEEP_CRAWL" "$CHAIN_DEPTH" \
+        "$WAYBACK" "$SOURCE_MAPS" "$VALIDATE" "$ENDPOINT_PROBE" "$DIFF_MODE" << 'PYEOF'
+import json, sys, datetime
+out = sys.argv[1]
+data = {
+    "tool": "JSHawk",
+    "version": sys.argv[4],
+    "domain": sys.argv[2],
+    "base_url": sys.argv[3],
+    "started": datetime.datetime.now().isoformat(),
+    "config": {
+        "entropy_threshold": float(sys.argv[5]),
+        "threads": int(sys.argv[6]),
+        "deep_crawl": sys.argv[7] == "true",
+        "chain_depth": int(sys.argv[8]),
+        "wayback": sys.argv[9] == "true",
+        "source_maps": sys.argv[10] == "true",
+        "validate": sys.argv[11] == "true",
+        "endpoint_probe": sys.argv[12] == "true",
+        "diff_mode": sys.argv[13] == "true"
+    }
+}
+json.dump(data, open(out, 'w'), indent=2)
+PYEOF
 
     info "Target:  ${BOLD}${CLEAN_DOMAIN}${NC}"
     info "Results: $RESULTS_DIR"
@@ -503,17 +532,75 @@ INFOEOF
 # Resolve a JS URL relative to base
 resolve_js_url() {
     local ref="$1" base_url="$2"
+    base_url="${base_url%%/}"
+    local origin
+    origin=$(echo "$base_url" | grep -oE '^https?://[^/]+' || echo "https://${CLEAN_DOMAIN}")
     case "$ref" in
-        http*) echo "$ref" ;;
-        //*)   echo "https:${ref}" ;;
-        /*)    echo "${base_url%%/*}//$(echo "$base_url" | cut -d/ -f3)${ref}" ;;
-        ./*)   local dir="${base_url%/*}"; echo "${dir}/${ref#./}" ;;
-        ../*)  local dir="${base_url%/*}"; echo "${dir%/*}/${ref#../}" ;;
-        *)     echo "${base_url%/*}/${ref}" ;;
+        https://*|http://*) echo "$ref" ;;
+        //*) echo "https:${ref}" ;;
+        /*)  echo "${origin}${ref}" ;;
+        ./*)
+            local dir="${base_url%/*}"
+            echo "${dir}/${ref#./}"
+            ;;
+        ../*)
+            local dir="${base_url%/*}"
+            echo "${dir%/*}/${ref#../}"
+            ;;
+        "")  ;;
+        *)
+            local dir="${base_url%/*}"
+            echo "${dir}/${ref}"
+            ;;
     esac
 }
 
-# JS discovery from a page
+# Extract JS src/href refs from an HTML file
+extract_js_from_html() {
+    local hf="$1"
+    grep -oE 'src="[^"]+\.js[^"]*"'    "$hf" 2>/dev/null | sed 's/^src="//;s/"[^"]*$//'
+    grep -oE "src='[^']+\\.js[^']*'"    "$hf" 2>/dev/null | sed "s/^src='//;s/'[^']*$//"
+    grep -oE 'src=/[^[:space:]>"'"'"']+\.js[^[:space:]>"'"'"']*' "$hf" 2>/dev/null | sed 's/^src=//'
+    grep -oiE 'href="[^"]+\.js[^"]*"'   "$hf" 2>/dev/null | sed 's/^[Hh][Rr][Ee][Ff]="//;s/"[^"]*$//'
+    grep -oiE "href='[^']+\\.js[^']*'"  "$hf" 2>/dev/null | sed "s/^[Hh][Rr][Ee][Ff]='//;s/'[^']*$//"
+    grep -oE '"[^"]*/_next/[^"]+\.js"'  "$hf" 2>/dev/null | tr -d '"'
+    grep -oE '"[^"]*/assets/[^"]+\.js"' "$hf" 2>/dev/null | tr -d '"'
+    grep -oE '"[^"]*/static/[^"]+\.js"' "$hf" 2>/dev/null | tr -d '"'
+    grep -oE '"[^"]*/chunks/[^"]+\.js"' "$hf" 2>/dev/null | tr -d '"'
+    grep -oE '"[^"]*/dist/[^"]+\.js"'   "$hf" 2>/dev/null | tr -d '"'
+    grep -oE '"[^"]*/build/[^"]+\.js"'  "$hf" 2>/dev/null | tr -d '"'
+}
+
+# Parse webpack manifest JSON to extract all chunk URLs
+parse_webpack_manifest() {
+    local base_url="$1"
+    # Common webpack manifest paths
+    local manifest_paths=("/_next/static/chunks/webpack.js"
+                          "/static/js/runtime-main.js"
+                          "/asset-manifest.json"
+                          "/webpack-manifest.json"
+                          "/static/webpack-manifest.json"
+                          "/manifest.json"
+                          "/__webpack_hmr")
+    local tmp
+    tmp=$(mktemp)
+    for p in "${manifest_paths[@]}"; do
+        local murl="${base_url}${p}"
+        local code
+        code=$(do_curl -o "$tmp" -w "%{http_code}" "$murl" 2>/dev/null || echo "000")
+        if [[ "$code" == "200" && -s "$tmp" ]]; then
+            # Extract .js paths from JSON manifest
+            grep -oE '"[^"]+\.js"' "$tmp" 2>/dev/null | tr -d '"' | while IFS= read -r jsref; do
+                local resolved
+                resolved=$(resolve_js_url "$jsref" "$base_url")
+                [[ -n "$resolved" && "$resolved" =~ ^https?:// ]] && echo "$resolved"
+            done >> "${RESULTS_DIR}/all_js_discovered.txt" || true
+            vlog "  Webpack manifest parsed: $murl"
+        fi
+    done
+    rm -f "$tmp"
+}
+
 enhanced_js_discovery() {
     local target="$1"
     local safe_name
@@ -522,41 +609,109 @@ enhanced_js_discovery() {
 
     info "Discovery: $target"
 
-    local attempt success=false
+    local fetch_url="$BASE_URL"
+    [[ "$target" =~ ^https?:// ]] && fetch_url="$target"
+
+    local effective_url="" attempt
     for attempt in 1 2 3; do
-        if do_curl -o "$html_file" "$target" 2>/dev/null && [[ -s "$html_file" ]]; then
-            success=true; break
-        fi
+        effective_url=$(do_curl -o "$html_file" -w "%{url_effective}" "$fetch_url" 2>/dev/null || true)
+        [[ -s "$html_file" ]] && break
         sleep $((attempt * 2))
     done
 
-    if [[ "$success" != true ]]; then
-        warn "Could not fetch: $target"
+    if [[ ! -s "$html_file" ]]; then
+        warn "Could not fetch: $fetch_url"
         return 1
     fi
 
-    local base_url
-    base_url=$(echo "$target" | grep -oE 'https?://[^/]+' || echo "$BASE_URL")
+    local base_url="https://${CLEAN_DOMAIN}"
+    if [[ -n "$effective_url" && "$effective_url" =~ ^https?:// ]]; then
+        base_url=$(echo "$effective_url" | grep -oE 'https?://[^/]+' || echo "https://${CLEAN_DOMAIN}")
+    fi
+    vlog "  Effective base: $base_url"
 
     touch "${RESULTS_DIR}/all_js_discovered.txt"
 
-    # Extract script src
-    grep -oE 'src="[^"]*\.js[^"]*"' "$html_file" 2>/dev/null | sed 's/src="//;s/"//' | while read -r ref; do
-        [[ -n "$ref" ]] && resolve_js_url "$ref" "$base_url"
+    extract_js_from_html "$html_file" | grep -v '^$' | sort -u | while IFS= read -r ref; do
+        local resolved
+        resolved=$(resolve_js_url "$ref" "$base_url")
+        [[ -n "$resolved" && "$resolved" =~ ^https?:// ]] && echo "$resolved"
     done >> "${RESULTS_DIR}/all_js_discovered.txt"
 
-    grep -oE "src='[^']*\.js[^']*'" "$html_file" 2>/dev/null | sed "s/src='//;s/'//" | while read -r ref; do
-        [[ -n "$ref" ]] && resolve_js_url "$ref" "$base_url"
-    done >> "${RESULTS_DIR}/all_js_discovered.txt"
-
-    # Link preload
-    grep -oiE 'href="[^"]*\.js[^"]*"' "$html_file" 2>/dev/null | sed 's/href="//;s/"//' | while read -r ref; do
-        [[ -n "$ref" ]] && resolve_js_url "$ref" "$base_url"
-    done >> "${RESULTS_DIR}/all_js_discovered.txt"
+    # Parse webpack/asset manifests
+    parse_webpack_manifest "$base_url"
 
     local count
-    count=$(wc -l < "${RESULTS_DIR}/all_js_discovered.txt" 2>/dev/null || echo 0)
-    ok "$count JS files discovered from $target"
+    count=$(wc -l < "${RESULTS_DIR}/all_js_discovered.txt" 2>/dev/null | tr -d '[:space:]')
+    count="${count:-0}"
+
+    # Retry with www. prefix if nothing found
+    if [[ "$count" -eq 0 ]] && [[ ! "$fetch_url" =~ ://www\. ]]; then
+        local www_url www_effective www_html
+        www_url="https://www.${CLEAN_DOMAIN}"
+        www_html="${RESULTS_DIR}/logs/page_www.html"
+        vlog "  Retrying with www prefix: $www_url"
+        www_effective=$(do_curl -o "$www_html" -w "%{url_effective}" "$www_url" 2>/dev/null || true)
+        if [[ -s "$www_html" ]]; then
+            [[ -n "$www_effective" && "$www_effective" =~ ^https?:// ]] && \
+                base_url=$(echo "$www_effective" | grep -oE 'https?://[^/]+' || echo "$base_url")
+            extract_js_from_html "$www_html" | grep -v '^$' | sort -u | while IFS= read -r ref; do
+                local resolved
+                resolved=$(resolve_js_url "$ref" "$base_url")
+                [[ -n "$resolved" && "$resolved" =~ ^https?:// ]] && echo "$resolved"
+            done >> "${RESULTS_DIR}/all_js_discovered.txt"
+            parse_webpack_manifest "$base_url"
+            count=$(wc -l < "${RESULTS_DIR}/all_js_discovered.txt" 2>/dev/null | tr -d '[:space:]')
+            count="${count:-0}"
+        fi
+    fi
+
+    # WAF/SPA fallback: Wayback CDX
+    if [[ "$count" -eq 0 ]]; then
+        warn "No JS found in HTML — WAF or JS-rendered SPA detected"
+        info "Querying Wayback CDX for archived JS files..."
+        local cdx_base="https://web.archive.org/cdx/search/cdx"
+        local cdx_opts="&output=text&fl=timestamp,original&filter=statuscode:200&collapse=digest&limit=200&from=20200101"
+        for pat in "*.${CLEAN_DOMAIN}/*.js" "${CLEAN_DOMAIN}/*.js" "www.${CLEAN_DOMAIN}/*.js"; do
+            do_curl "${cdx_base}?url=${pat}${cdx_opts}" 2>/dev/null \
+            | while read -r ts orig; do
+                [[ -z "$ts" || -z "$orig" ]] && continue
+                echo "https://web.archive.org/web/${ts}if_/${orig}"
+            done >> "${RESULTS_DIR}/all_js_discovered.txt" || true
+        done
+        count=$(wc -l < "${RESULTS_DIR}/all_js_discovered.txt" 2>/dev/null | tr -d '[:space:]')
+        count="${count:-0}"
+        [[ "$count" -gt 0 ]] && info "Wayback CDX: $count archived JS files queued"
+    fi
+
+    # Last resort: probe well-known JS paths directly
+    if [[ "$count" -eq 0 ]]; then
+        info "Probing common JS paths directly..."
+        local paths=("/static/js/main.js" "/static/js/bundle.js" "/assets/js/app.js"
+                     "/js/main.js" "/js/app.js" "/js/bundle.js" "/app.js" "/bundle.js"
+                     "/_next/static/chunks/main.js" "/dist/bundle.js" "/public/js/app.js"
+                     "/static/js/index.js" "/assets/index.js" "/build/static/js/main.js")
+        local probe_tmp
+        probe_tmp=$(mktemp)
+        for p in "${paths[@]}"; do
+            local purl="${base_url}${p}"
+            local http_code
+            http_code=$(do_curl -o "$probe_tmp" -w "%{http_code}" "$purl" 2>/dev/null || echo "000")
+            if [[ "$http_code" == "200" && -s "$probe_tmp" ]]; then
+                head -c 100 "$probe_tmp" | grep -qiE '<!DOCTYPE|<html' && continue
+                echo "$purl" >> "${RESULTS_DIR}/all_js_discovered.txt"
+                vlog "  Direct probe found: $purl"
+            fi
+        done
+        rm -f "$probe_tmp"
+        count=$(wc -l < "${RESULTS_DIR}/all_js_discovered.txt" 2>/dev/null | tr -d '[:space:]')
+        count="${count:-0}"
+    fi
+
+    sort -u "${RESULTS_DIR}/all_js_discovered.txt" -o "${RESULTS_DIR}/all_js_discovered.txt" 2>/dev/null || true
+    count=$(wc -l < "${RESULTS_DIR}/all_js_discovered.txt" 2>/dev/null | tr -d '[:space:]')
+    count="${count:-0}"
+    ok "$count JS files queued for download from $target"
     return 0
 }
 
@@ -565,38 +720,31 @@ discover_js_in_js() {
     local jsfile="$1" base_url="$2" depth="${3:-0}"
     [[ "$DEEP_CRAWL" != true ]] && return
     [[ "$depth" -ge "$CHAIN_DEPTH" ]] && return
+    [[ ! -f "$jsfile" ]] && return
 
     vlog "  ${DIM}[chain d${depth}]${NC} Scanning $(basename "$jsfile") for JS refs..."
 
-    local tmp_refs="${RESULTS_DIR}/logs/.chain_refs_$$.txt"
-    > "$tmp_refs"
-
-    # import() and require()
-    grep -oE "require\(['\"][^'\"]+\.js[^'\"]*['\"]" "$jsfile" 2>/dev/null \
-        | grep -oE "['\"][^'\"]+\.js[^'\"]*['\"]" | tr -d "\"'" >> "$tmp_refs"
-    grep -oE "import\(['\"][^'\"]+\.js[^'\"]*['\"]" "$jsfile" 2>/dev/null \
-        | grep -oE "['\"][^'\"]+\.js[^'\"]*['\"]" | tr -d "\"'" >> "$tmp_refs"
-
-    # Quoted JS paths
-    grep -oE "'/[a-zA-Z0-9_/.-]+\.js'" "$jsfile" 2>/dev/null | tr -d "'" >> "$tmp_refs"
-    grep -oE '"/[a-zA-Z0-9_/.-]+\.js"' "$jsfile" 2>/dev/null | tr -d '"' >> "$tmp_refs"
-
-    # Webpack chunk hashes
-    grep -oE '"[a-f0-9]{8,}"' "$jsfile" 2>/dev/null | tr -d '"' | while read -r hash; do
-        echo "/static/js/${hash}.chunk.js"
-        echo "/assets/${hash}.js"
-    done >> "$tmp_refs"
-
-    sort -u "$tmp_refs" | while read -r ref; do
-        [[ -z "$ref" ]] && continue
+    {
+        grep -oE "require\('[^']+\.js[^']*'\)" "$jsfile" 2>/dev/null             | grep -oE "'[^']+\.js[^']*'" | tr -d "'"
+        grep -oE 'require\("[^"]+\.js[^"]*"\)' "$jsfile" 2>/dev/null             | grep -oE '"[^"]+\.js[^"]*"' | tr -d '"'
+        grep -oE "import\('[^']+\.js[^']*'\)" "$jsfile" 2>/dev/null              | grep -oE "'[^']+\.js[^']*'" | tr -d "'"
+        grep -oE 'import\("[^"]+\.js[^"]*"\)' "$jsfile" 2>/dev/null              | grep -oE '"[^"]+\.js[^"]*"' | tr -d '"'
+        grep -oE "'/[a-zA-Z0-9_/.-]+\.js'" "$jsfile" 2>/dev/null | tr -d "'"
+        grep -oE '"/[a-zA-Z0-9_/.-]+\.js"' "$jsfile" 2>/dev/null | tr -d '"'
+        grep -oE 'src="[^"]+\.js[^"]*"' "$jsfile" 2>/dev/null \
+            | sed 's/^src="//;s/"[[:space:]]*$//'
+        # Webpack chunk map: {0:"abc",1:"def"} style chunk IDs -> resolve to chunk paths
+        grep -oE '"[a-f0-9]{8,20}"' "$jsfile" 2>/dev/null | tr -d '"' | while IFS= read -r chunk; do
+            echo "/static/chunks/${chunk}.js"
+        done
+    } | grep -v '^$' | grep '\.js' | sort -u | while IFS= read -r ref; do
         local full_url
         full_url=$(resolve_js_url "$ref" "$base_url")
+        [[ -z "$full_url" || ! "$full_url" =~ ^https?:// ]] && continue
         grep -qxF "$full_url" "${RESULTS_DIR}/all_js_discovered.txt" 2>/dev/null && continue
         echo "$full_url" >> "${RESULTS_DIR}/all_js_discovered.txt"
         vlog "  ${PURPLE}[chain]${NC} +$full_url"
     done
-
-    rm -f "$tmp_refs"
 }
 
 # Wayback Machine discovery
@@ -605,16 +753,20 @@ wayback_discovery() {
     info "Wayback: querying historical JS snapshots..."
 
     local cdx="https://web.archive.org/cdx/search/cdx"
-    cdx+="?url=${CLEAN_DOMAIN}/*.js&output=text&fl=timestamp,original"
-    cdx+="&filter=statuscode:200&collapse=digest&limit=200&from=20200101"
+    cdx+="?url=*.${CLEAN_DOMAIN}/*.js&output=text&fl=timestamp,original"
+    cdx+="&filter=statuscode:200&collapse=digest&limit=500&from=20200101"
 
     do_curl "$cdx" 2>/dev/null | while read -r ts orig; do
         [[ -z "$ts" || -z "$orig" ]] && continue
         echo "https://web.archive.org/web/${ts}if_/${orig}"
     done >> "${RESULTS_DIR}/all_js_discovered.txt"
 
+    sort -u "${RESULTS_DIR}/all_js_discovered.txt" -o "${RESULTS_DIR}/all_js_discovered.txt" 2>/dev/null || true
+
     local wb_count
     wb_count=$(grep -c "web.archive.org" "${RESULTS_DIR}/all_js_discovered.txt" 2>/dev/null || echo 0)
+    wb_count="${wb_count//[[:space:]]/}"
+    wb_count="${wb_count:-0}"
     ok "Wayback: $wb_count historical snapshots queued"
 }
 
@@ -624,7 +776,8 @@ parallel_download() {
 
     sort -u "${RESULTS_DIR}/all_js_discovered.txt" -o "${RESULTS_DIR}/all_js_discovered.txt" 2>/dev/null || true
     local total
-    total=$(wc -l < "${RESULTS_DIR}/all_js_discovered.txt" 2>/dev/null || echo 0)
+    total=$(wc -l < "${RESULTS_DIR}/all_js_discovered.txt" 2>/dev/null | tr -d '[:space:]')
+    total="${total:-0}"
     if [[ "$total" -eq 0 ]]; then warn "No JS files to download"; return 1; fi
 
     info "Downloading $total unique JS files ($THREADS threads)..."
@@ -679,9 +832,56 @@ parallel_download() {
     wait "${pids[@]}" 2>/dev/null || true
     echo ""
 
+    # Second pass: deep crawl may have added new JS URLs
+    if [[ "$DEEP_CRAWL" == true ]]; then
+        local new_total
+        new_total=$(wc -l < "${RESULTS_DIR}/all_js_discovered.txt" 2>/dev/null | tr -d '[:space:]')
+        new_total="${new_total:-0}"
+        if [[ "$new_total" -gt "$total" ]]; then
+            local added=$(( new_total - total ))
+            info "Deep crawl found $added more JS files — downloading..."
+            local new_pids=()
+            tail -n "$added" "${RESULTS_DIR}/all_js_discovered.txt" | while IFS= read -r js_url; do
+                (
+                    local safe
+                    safe=$(echo "$js_url" | sha256sum 2>/dev/null | cut -c1-12 || echo "chain_$$")
+                    local outfile="${RESULTS_DIR}/js_files/${safe}.js"
+                    if [[ -f "$outfile" && -s "$outfile" ]]; then
+                        echo "OK" >> "${RESULTS_DIR}/logs/dl_status.txt"
+                        exit 0
+                    fi
+                    if do_curl -o "$outfile" "$js_url" 2>/dev/null && [[ -s "$outfile" ]]; then
+                        local h100
+                        h100=$(head -c 100 "$outfile" 2>/dev/null || true)
+                        if echo "$h100" | grep -qiE '<!DOCTYPE|<html'; then
+                            rm -f "$outfile"
+                            echo "FAIL" >> "${RESULTS_DIR}/logs/dl_status.txt"
+                            exit 0
+                        fi
+                        echo "${js_url}|${safe}.js" >> "${RESULTS_DIR}/downloaded_files.txt"
+                        echo "OK" >> "${RESULTS_DIR}/logs/dl_status.txt"
+                    else
+                        rm -f "$outfile"
+                        echo "FAIL" >> "${RESULTS_DIR}/logs/dl_status.txt"
+                    fi
+                ) &
+                new_pids+=($!)
+                if [[ ${#new_pids[@]} -ge "$THREADS" ]]; then
+                    wait "${new_pids[@]}" 2>/dev/null || true
+                    new_pids=()
+                fi
+            done
+            wait 2>/dev/null || true
+        fi
+    fi
+
     local ok_count fail_count
-    ok_count=$(grep -c "^OK$"   "${RESULTS_DIR}/logs/dl_status.txt" 2>/dev/null || echo 0)
+    ok_count=$(grep -c "^OK$" "${RESULTS_DIR}/logs/dl_status.txt" 2>/dev/null || echo 0)
+    ok_count="${ok_count//[[:space:]]/}"
+    ok_count="${ok_count:-0}"
     fail_count=$(grep -c "^FAIL$" "${RESULTS_DIR}/logs/dl_status.txt" 2>/dev/null || echo 0)
+    fail_count="${fail_count//[[:space:]]/}"
+    fail_count="${fail_count:-0}"
     ok "Downloaded: $ok_count   Failed: $fail_count"
     [[ "$ok_count" -eq 0 ]] && warn "Nothing downloaded" && return 1
     return 0
@@ -716,9 +916,9 @@ try:
         name = pathlib.Path(src).name or "source_{}.js".format(i)
         name = name.replace('/', '_').replace('..', '_')
         h = hashlib.sha256(content.encode()).hexdigest()[:8]
-        out = os.path.join(js_dir, "srcmap_{}_{}" .format(h, name))
+        out = os.path.join(js_dir, "srcmap_{}_{}".format(h, name))
         open(out, 'w').write(content)
-except Exception as e:
+except Exception:
     pass
 PYEOF
     done < "${RESULTS_DIR}/source_map_urls.txt"
@@ -740,11 +940,17 @@ extract_endpoints() {
         grep -oE '"/admin[^"]{1,}"' "$jsfile" 2>/dev/null | tr -d '"'
         grep -oE "'/internal[^']{1,}'" "$jsfile" 2>/dev/null | tr -d "'"
         grep -oE '"/internal[^"]{1,}"' "$jsfile" 2>/dev/null | tr -d '"'
+        grep -oE "'/dashboard[^']{1,}'" "$jsfile" 2>/dev/null | tr -d "'"
+        grep -oE '"/dashboard[^"]{1,}"' "$jsfile" 2>/dev/null | tr -d '"'
         grep -oE 'fetch\("[^"]{4,}"' "$jsfile" 2>/dev/null | sed 's/fetch("//;s/"$//'
         grep -oE "fetch\('[^']{4,}'" "$jsfile" 2>/dev/null | sed "s/fetch('//;s/'$//"
         grep -oE 'url: "[^"]{4,}"' "$jsfile" 2>/dev/null | sed 's/url: "//;s/"$//'
         grep -oE "url: '[^']{4,}'" "$jsfile" 2>/dev/null | sed "s/url: '//;s/'$//"
-    } | sort -u
+        grep -oE 'baseURL: "[^"]{4,}"' "$jsfile" 2>/dev/null | sed 's/baseURL: "//;s/"$//'
+        grep -oE "baseURL: '[^']{4,}'" "$jsfile" 2>/dev/null | sed "s/baseURL: '//;s/'$//"
+        grep -oE 'endpoint: "[^"]{4,}"' "$jsfile" 2>/dev/null | sed 's/endpoint: "//;s/"$//'
+        grep -oE "endpoint: '[^']{4,}'" "$jsfile" 2>/dev/null | sed "s/endpoint: '//;s/'$//"
+    } | grep -E '^(/|https?://)' | sort -u
 }
 
 # Safe pattern extraction
@@ -768,12 +974,13 @@ safe_extract() {
     done
 }
 
-# Main analysis
+# Main analysis — all 65+ patterns
 analyze_enhanced_secrets() {
     info "Analysis: scanning with entropy >= $ENTROPY_THRESHOLD..."
 
     local files_count
-    files_count=$(find "${RESULTS_DIR}/js_files" -type f -name "*.js" 2>/dev/null | wc -l || echo 0)
+    files_count=$(find "${RESULTS_DIR}/js_files" -type f -name "*.js" 2>/dev/null | wc -l | tr -d '[:space:]')
+    files_count="${files_count:-0}"
     info "$files_count files to scan"
     echo ""
 
@@ -788,8 +995,14 @@ analyze_enhanced_secrets() {
         processed=$(( processed + 1 ))
         draw_progress "$processed" "$files_count" "$filename"
 
-        # --- AWS
+        # =====================================================================
+        # CLOUD
+        # =====================================================================
+
+        # --- AWS Access Key
         safe_extract 'AKIA[0-9A-Z]{16}' "AWS_ACCESS_KEY" "$jsfile" "$original_url"
+
+        # --- AWS Secret Key
         grep -nE '(aws[_-]?secret|secretAccessKey)[^A-Za-z0-9]*[A-Za-z0-9/+]{40}' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
             local ln="${raw%%:*}"
             local secret
@@ -801,8 +1014,10 @@ analyze_enhanced_secrets() {
             fi
         done
 
-        # --- Google / Firebase
+        # --- Google API Key
         safe_extract 'AIza[0-9A-Za-z_-]{35}' "GOOGLE_API_KEY" "$jsfile" "$original_url"
+
+        # --- Firebase URL
         grep -nE '(firebaseio\.com|databaseURL)' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
             local ln="${raw%%:*}"
             local secret
@@ -810,7 +1025,15 @@ analyze_enhanced_secrets() {
             [[ -n "$secret" ]] && secret_emit "FIREBASE_URL" "$secret" "$filename" "$original_url" "$ln"
         done
 
-        # --- Azure
+        # --- Firebase API Key (firebaseConfig object)
+        grep -nE 'apiKey[[:space:]]*:[[:space:]]*"AIza[0-9A-Za-z_-]{35}"' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE 'AIza[0-9A-Za-z_-]{35}' | head -1)
+            [[ -n "$secret" ]] && secret_emit "FIREBASE_API_KEY" "$secret" "$filename" "$original_url" "$ln"
+        done
+
+        # --- Azure Storage Key
         grep -nE 'AccountKey=[A-Za-z0-9+/]{86,88}==' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
             local ln="${raw%%:*}"
             local secret
@@ -818,27 +1041,147 @@ analyze_enhanced_secrets() {
             [[ -n "$secret" ]] && secret_emit "AZURE_STORAGE_KEY" "$secret" "$filename" "$original_url" "$ln"
         done
 
-        # --- Stripe
-        safe_extract '(sk|pk|rk)_live_[0-9a-zA-Z]{24,}' "STRIPE_LIVE_KEY" "$jsfile" "$original_url"
+        # --- Azure Connection String
+        grep -nE 'DefaultEndpointsProtocol=https?;AccountName=[^;]+;AccountKey=[^;]+' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE 'DefaultEndpointsProtocol=[^"'"'"'[:space:]]{20,}' | head -1)
+            [[ -n "$secret" ]] && secret_emit "AZURE_CONN_STRING" "$secret" "$filename" "$original_url" "$ln"
+        done
 
-        # --- GitHub
+        # --- GCP Service Account
+        grep -nE '"type"[[:space:]]*:[[:space:]]*"service_account"' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '"client_email"[[:space:]]*:[[:space:]]*"[^"@]+@[^"]+\.iam\.gserviceaccount\.com"' | grep -oE '[a-z0-9_-]+@[^"]+\.iam\.gserviceaccount\.com' | head -1)
+            [[ -n "$secret" ]] && secret_emit "GCP_SERVICE_ACCOUNT" "$secret" "$filename" "$original_url" "$ln"
+        done
+        # Also catch the private_key directly
+        grep -nE '"private_key"[[:space:]]*:[[:space:]]*"-----BEGIN' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            secret_emit "GCP_PRIVATE_KEY" "GCP_PRIVATE_KEY_DETECTED" "$filename" "$original_url" "$ln"
+        done
+
+        # --- DigitalOcean Token
+        safe_extract 'dop_v1_[a-f0-9]{64}' "DIGITALOCEAN_TOKEN" "$jsfile" "$original_url"
+        # Personal Access Token (64 hex chars after a known DO prefix pattern)
+        grep -nE '(digitalocean|DO_TOKEN|do_token)[^A-Za-z0-9]*[a-f0-9]{64}' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '[a-f0-9]{64}' | head -1)
+            [[ -n "$secret" ]] && secret_emit "DIGITALOCEAN_TOKEN" "$secret" "$filename" "$original_url" "$ln"
+        done
+
+        # --- Heroku API Key
+        grep -nE '(heroku[_-]?api[_-]?key|HEROKU_API_KEY)[^A-Za-z0-9]*[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
+            [[ -n "$secret" ]] && secret_emit "HEROKU_API_KEY" "$secret" "$filename" "$original_url" "$ln"
+        done
+
+        # =====================================================================
+        # VCS / CI-CD
+        # =====================================================================
+
+        # --- GitHub Token + PAT
         safe_extract 'gh[poshru]_[A-Za-z0-9_]{30,}' "GITHUB_TOKEN" "$jsfile" "$original_url"
         safe_extract 'github_pat_[A-Za-z0-9_]{82}' "GITHUB_PAT" "$jsfile" "$original_url"
 
-        # --- GitLab
+        # --- GitLab Token
         safe_extract 'glpat-[A-Za-z0-9_-]{20,}' "GITLAB_TOKEN" "$jsfile" "$original_url"
 
-        # --- npm
+        # --- npm Token
         safe_extract 'npm_[A-Za-z0-9]{30,}' "NPM_TOKEN" "$jsfile" "$original_url"
 
-        # --- Slack
+        # --- Jenkins Token
+        grep -nE '(jenkins[_-]?token|JENKINS_TOKEN|jenkins[_-]?api[_-]?key)[^A-Za-z0-9]*[A-Za-z0-9]{32,}' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '[A-Za-z0-9]{32,}' | tail -1)
+            [[ -n "$secret" ]] && secret_emit "JENKINS_TOKEN" "$secret" "$filename" "$original_url" "$ln"
+        done
+
+        # --- Travis CI Token
+        grep -nE '(travis[_-]?token|TRAVIS_TOKEN|travis[_-]?api[_-]?key)[^A-Za-z0-9]*[A-Za-z0-9_-]{20,}' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '[A-Za-z0-9_-]{20,}' | tail -1)
+            [[ -n "$secret" ]] && secret_emit "TRAVIS_CI_TOKEN" "$secret" "$filename" "$original_url" "$ln"
+        done
+
+        # --- CircleCI Token
+        safe_extract 'circle-token=[A-Za-z0-9]{40}' "CIRCLECI_TOKEN" "$jsfile" "$original_url"
+        grep -nE '(circleci[_-]?token|CIRCLE_TOKEN|CIRCLECI_API_KEY)[^A-Za-z0-9]*[A-Za-z0-9]{40}' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '[A-Za-z0-9]{40}' | tail -1)
+            [[ -n "$secret" ]] && secret_emit "CIRCLECI_TOKEN" "$secret" "$filename" "$original_url" "$ln"
+        done
+
+        # =====================================================================
+        # PAYMENT
+        # =====================================================================
+
+        # --- Stripe Live Keys
+        safe_extract '(sk|pk|rk)_live_[0-9a-zA-Z]{24,}' "STRIPE_LIVE_KEY" "$jsfile" "$original_url"
+
+        # --- Stripe Test Keys (medium severity — still worth knowing)
+        safe_extract '(sk|pk|rk)_test_[0-9a-zA-Z]{24,}' "STRIPE_TEST_KEY" "$jsfile" "$original_url"
+
+        # --- PayPal Client ID / Secret
+        grep -nE '(paypal[_-]?client[_-]?id|PAYPAL_CLIENT_ID)[^A-Za-z0-9]*[A-Za-z0-9_-]{20,}' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '[A-Za-z0-9_-]{20,}' | tail -1)
+            [[ -n "$secret" ]] && secret_emit "PAYPAL_CLIENT_ID" "$secret" "$filename" "$original_url" "$ln"
+        done
+        grep -nE '(paypal[_-]?secret|PAYPAL_SECRET|paypal[_-]?client[_-]?secret)[^A-Za-z0-9]*[A-Za-z0-9_-]{20,}' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '[A-Za-z0-9_-]{20,}' | tail -1)
+            [[ -n "$secret" ]] && secret_emit "PAYPAL_SECRET" "$secret" "$filename" "$original_url" "$ln"
+        done
+
+        # --- Braintree Key
+        grep -nE '(braintree[_-]?key|braintree[_-]?token|BRAINTREE_KEY)[^A-Za-z0-9]*[A-Za-z0-9]{32,}' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '[A-Za-z0-9]{32,}' | tail -1)
+            [[ -n "$secret" ]] && secret_emit "BRAINTREE_KEY" "$secret" "$filename" "$original_url" "$ln"
+        done
+
+        # --- Shopify Admin Token
+        safe_extract 'shpat_[a-fA-F0-9]{32}' "SHOPIFY_ADMIN_TOKEN" "$jsfile" "$original_url"
+
+        # --- Shopify API Secret / Storefront Token
+        safe_extract 'shpss_[a-fA-F0-9]{32}' "SHOPIFY_SHARED_SECRET" "$jsfile" "$original_url"
+        safe_extract 'shpca_[a-fA-F0-9]{32}' "SHOPIFY_CUSTOM_APP_TOKEN" "$jsfile" "$original_url"
+        grep -nE '(shopify[_-]?api[_-]?secret|SHOPIFY_API_SECRET)[^A-Za-z0-9]*[a-fA-F0-9]{32}' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '[a-fA-F0-9]{32}' | tail -1)
+            [[ -n "$secret" ]] && secret_emit "SHOPIFY_API_SECRET" "$secret" "$filename" "$original_url" "$ln"
+        done
+
+        # --- Square Access Token
+        safe_extract 'sq0atp-[A-Za-z0-9_-]{22}' "SQUARE_ACCESS_TOKEN" "$jsfile" "$original_url"
+        safe_extract 'sq0csp-[A-Za-z0-9_-]{43}' "SQUARE_SECRET" "$jsfile" "$original_url"
+
+        # =====================================================================
+        # COMMUNICATION
+        # =====================================================================
+
+        # --- Slack Bot/User/App Token
         safe_extract 'xox[baprs]-[0-9A-Za-z-]{10,}' "SLACK_TOKEN" "$jsfile" "$original_url"
+
+        # --- Slack Webhook
         safe_extract 'hooks\.slack\.com/services/[A-Z0-9]+/[A-Z0-9]+/[A-Za-z0-9]+' "SLACK_WEBHOOK" "$jsfile" "$original_url"
 
         # --- SendGrid
         safe_extract 'SG\.[A-Za-z0-9_.+-]{60,}' "SENDGRID_KEY" "$jsfile" "$original_url"
 
-        # --- Twilio
+        # --- Twilio SID + Auth Token
         safe_extract 'AC[a-z0-9]{32}' "TWILIO_SID" "$jsfile" "$original_url"
         grep -nE '(authToken|auth_token)[^A-Za-z0-9]*[a-z0-9]{32}' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
             local ln="${raw%%:*}"
@@ -847,41 +1190,112 @@ analyze_enhanced_secrets() {
             [[ -n "$secret" ]] && secret_emit "TWILIO_AUTH_TOKEN" "$secret" "$filename" "$original_url" "$ln"
         done
 
-        # --- Shopify
-        safe_extract 'shpat_[a-fA-F0-9]{32}' "SHOPIFY_TOKEN" "$jsfile" "$original_url"
-
-        # --- Discord / Telegram
-        safe_extract 'discord(app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+' "DISCORD_WEBHOOK" "$jsfile" "$original_url"
-        safe_extract '[0-9]{8,10}:[A-Za-z0-9_-]{35}' "TELEGRAM_BOT" "$jsfile" "$original_url"
-
-        # --- Mailgun / Mailchimp
+        # --- Mailgun
         safe_extract 'key-[a-z0-9]{32}' "MAILGUN_KEY" "$jsfile" "$original_url"
+
+        # --- Mailchimp
         safe_extract '[a-f0-9]{32}-us[0-9]{1,2}' "MAILCHIMP_KEY" "$jsfile" "$original_url"
 
-        # --- AI providers
+        # --- Discord Bot Token
+        safe_extract '[MN][A-Za-z0-9]{23}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}' "DISCORD_BOT_TOKEN" "$jsfile" "$original_url"
+
+        # --- Discord Webhook
+        safe_extract 'discord(app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+' "DISCORD_WEBHOOK" "$jsfile" "$original_url"
+
+        # --- Telegram Bot Token
+        safe_extract '[0-9]{8,10}:[A-Za-z0-9_-]{35}' "TELEGRAM_BOT" "$jsfile" "$original_url"
+
+        # =====================================================================
+        # AI PROVIDERS
+        # =====================================================================
+
         safe_extract 'sk-[A-Za-z0-9]{48,}' "OPENAI_KEY" "$jsfile" "$original_url"
         safe_extract 'sk-ant-[A-Za-z0-9_-]{90,}' "ANTHROPIC_KEY" "$jsfile" "$original_url"
         safe_extract 'hf_[A-Za-z0-9]{30,}' "HUGGINGFACE_TOKEN" "$jsfile" "$original_url"
         safe_extract 'r8_[A-Za-z0-9]{40}' "REPLICATE_KEY" "$jsfile" "$original_url"
 
-        # --- Database URLs
-        grep -nE '(mysql|postgresql|postgres|mongodb|redis|amqp|mongodb\+srv)://[^@[:space:]"'"'"']{3,}@[a-zA-Z0-9.-]+' \
+        # =====================================================================
+        # DATABASE
+        # =====================================================================
+
+        grep -nE '(mysql|postgresql|postgres|mongodb|redis|amqp|mongodb\+srv|cassandra|couchdb)://[^@[:space:]"'"'"']{3,}@[a-zA-Z0-9.-]+' \
             "$jsfile" 2>/dev/null | while IFS= read -r raw; do
             local ln="${raw%%:*}"
             local secret
-            secret=$(echo "${raw#*:}" | grep -oE '(mysql|postgresql|postgres|mongodb|redis|amqp|mongodb\+srv)://[^[:space:]"'"'"'<>]{3,}' | head -1)
+            secret=$(echo "${raw#*:}" | grep -oE '(mysql|postgresql|postgres|mongodb|redis|amqp|mongodb\+srv|cassandra|couchdb)://[^[:space:]"'"'"'<>]{3,}' | head -1)
             [[ -n "$secret" ]] && secret_emit "DATABASE_URL" "$secret" "$filename" "$original_url" "$ln"
         done
 
-        # --- Private keys
+        # =====================================================================
+        # PRIVATE / SSH KEYS
+        # =====================================================================
+
         if grep -q "BEGIN.*PRIVATE KEY\|BEGIN OPENSSH" "$jsfile" 2>/dev/null; then
             local kln
             kln=$(grep -n "BEGIN.*PRIVATE\|BEGIN OPENSSH" "$jsfile" 2>/dev/null | head -1 | cut -d: -f1)
             secret_emit "PRIVATE_KEY" "PEM_BLOCK_DETECTED" "$filename" "$original_url" "${kln:-1}"
         fi
 
-        # --- JWT
+        # =====================================================================
+        # SECRETS / TOKENS
+        # =====================================================================
+
+        # --- JWT Token
         safe_extract 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' "JWT_TOKEN" "$jsfile" "$original_url"
+
+        # --- JWT Secret (hardcoded signing secret)
+        grep -nE '(jwt[_-]?secret|JWT_SECRET|jwtSecret|signing[_-]?key|SIGNING_KEY)[[:space:]]*[:=][[:space:]]*"[^"]{12,}"' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '"[^"]{12,}"' | head -1 | tr -d '"')
+            local ctx
+            ctx=$(sed -n "$((${ln:-1} > 2 ? ${ln:-1}-2 : 1)),$((${ln:-1}+2))p" "$jsfile" 2>/dev/null | tr '\n' ' ')
+            [[ -n "$secret" ]] && secret_emit "JWT_SECRET" "$secret" "$filename" "$original_url" "$ln" "$ctx"
+        done
+
+        # --- Hardcoded Passwords
+        grep -nE '(password|passwd|pwd)[[:space:]]*[:=][[:space:]]*"[^"]{8,}"' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '"[^"]{8,}"' | head -1 | tr -d '"')
+            local ctx
+            ctx=$(sed -n "$((${ln:-1} > 2 ? ${ln:-1}-2 : 1)),$((${ln:-1}+2))p" "$jsfile" 2>/dev/null | tr '\n' ' ')
+            [[ -n "$secret" ]] && secret_emit "HARDCODED_PASSWORD" "$secret" "$filename" "$original_url" "$ln" "$ctx"
+        done
+
+        # --- Encryption Key
+        grep -nE '(encryption[_-]?key|ENCRYPTION_KEY|aes[_-]?key|AES_KEY|cipher[_-]?key)[[:space:]]*[:=][[:space:]]*"[A-Za-z0-9+/=]{16,}"' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '"[A-Za-z0-9+/=]{16,}"' | head -1 | tr -d '"')
+            local ctx
+            ctx=$(sed -n "$((${ln:-1} > 2 ? ${ln:-1}-2 : 1)),$((${ln:-1}+2))p" "$jsfile" 2>/dev/null | tr '\n' ' ')
+            [[ -n "$secret" ]] && secret_emit "ENCRYPTION_KEY" "$secret" "$filename" "$original_url" "$ln" "$ctx"
+        done
+
+        # --- Generic Secret Key
+        grep -nE '(secret[_-]?key|SECRET_KEY|app[_-]?secret|APP_SECRET)[[:space:]]*[:=][[:space:]]*"[A-Za-z0-9_\-+/=]{20,}"' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '"[A-Za-z0-9_\-+/=]{20,}"' | head -1 | tr -d '"')
+            local ctx
+            ctx=$(sed -n "$((${ln:-1} > 2 ? ${ln:-1}-2 : 1)),$((${ln:-1}+2))p" "$jsfile" 2>/dev/null | tr '\n' ' ')
+            [[ -n "$secret" ]] && secret_emit "GENERIC_SECRET_KEY" "$secret" "$filename" "$original_url" "$ln" "$ctx"
+        done
+
+        # --- Generic API Key
+        grep -nE '(api[_-]?key|apikey)[[:space:]]*[:=][[:space:]]*"[A-Za-z0-9_-]{20,}"' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '"[A-Za-z0-9_-]{20,}"' | head -1 | tr -d '"')
+            local ctx
+            ctx=$(sed -n "$((${ln:-1} > 2 ? ${ln:-1}-2 : 1)),$((${ln:-1}+2))p" "$jsfile" 2>/dev/null | tr '\n' ' ')
+            [[ -n "$secret" ]] && secret_emit "GENERIC_API_KEY" "$secret" "$filename" "$original_url" "$ln" "$ctx"
+        done
+
+        # =====================================================================
+        # NETWORK
+        # =====================================================================
 
         # --- Internal IPs
         grep -nE '(10\.[0-9]{1,3}|192\.168|172\.(1[6-9]|2[0-9]|3[01]))\.[0-9]{1,3}\.[0-9]{1,3}' \
@@ -892,35 +1306,107 @@ analyze_enhanced_secrets() {
             [[ -n "$secret" ]] && secret_emit "INTERNAL_IP" "$secret" "$filename" "$original_url" "$ln"
         done
 
-        # --- Hardcoded passwords
-        grep -nE '(password|passwd|pwd)[[:space:]]*[:=][[:space:]]*"[^"]{8,}"' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+        # --- Private Subnet CIDR
+        grep -nE '(10\.[0-9]{1,3}|192\.168|172\.(1[6-9]|2[0-9]|3[01]))\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}' \
+            "$jsfile" 2>/dev/null | while IFS= read -r raw; do
             local ln="${raw%%:*}"
             local secret
-            secret=$(echo "${raw#*:}" | grep -oE '"[^"]{8,}"' | head -1 | tr -d '"')
-            local ctx
-            ctx=$(sed -n "$((${ln:-1} > 2 ? ${ln:-1}-2 : 1)),$((${ln:-1}+2))p" "$jsfile" 2>/dev/null | tr '\n' ' ')
-            [[ -n "$secret" ]] && secret_emit "HARDCODED_PASSWORD" "$secret" "$filename" "$original_url" "$ln" "$ctx"
+            secret=$(echo "${raw#*:}" | grep -oE '(10\.[0-9]{1,3}|192\.168|172\.(1[6-9]|2[0-9]|3[01]))\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}' | head -1)
+            [[ -n "$secret" ]] && secret_emit "PRIVATE_CIDR" "$secret" "$filename" "$original_url" "$ln"
         done
 
-        # --- Sentry / Mapbox / Okta
-        safe_extract 'https://[a-f0-9]{32}@(o[0-9]+\.)?ingest\.sentry\.io/[0-9]+' "SENTRY_DSN" "$jsfile" "$original_url"
-        safe_extract 'pk\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' "MAPBOX_TOKEN" "$jsfile" "$original_url"
+        # --- Basic Auth in URL
+        grep -nE 'https?://[A-Za-z0-9_.-]+:[A-Za-z0-9_!@#$%^&*.-]{4,}@[A-Za-z0-9.-]+' \
+            "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE 'https?://[A-Za-z0-9_.-]+:[A-Za-z0-9_!@#$%^&*.-]{4,}@[A-Za-z0-9.-]+' | head -1)
+            [[ -n "$secret" ]] && secret_emit "BASIC_AUTH_URL" "$secret" "$filename" "$original_url" "$ln"
+        done
+
+        # --- S3 Bucket URLs
+        grep -nE '(s3://[a-z0-9_-]+|[a-z0-9_-]+\.s3\.[a-z0-9-]+\.amazonaws\.com|[a-z0-9_-]+\.s3\.amazonaws\.com)' \
+            "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '(s3://[a-z0-9_-]+|[a-z0-9_.-]+\.s3\.[a-z0-9-]+\.amazonaws\.com|[a-z0-9_.-]+\.s3\.amazonaws\.com)' | head -1)
+            [[ -n "$secret" ]] && secret_emit "S3_BUCKET_URL" "$secret" "$filename" "$original_url" "$ln"
+        done
+
+        # =====================================================================
+        # AUTH / IAM
+        # =====================================================================
+
+        # --- Auth0 Client Secret
+        grep -nE '(auth0[_-]?client[_-]?secret|AUTH0_CLIENT_SECRET|auth0[_-]?secret)[^A-Za-z0-9]*[A-Za-z0-9_-]{32,}' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '[A-Za-z0-9_-]{32,}' | tail -1)
+            [[ -n "$secret" ]] && secret_emit "AUTH0_CLIENT_SECRET" "$secret" "$filename" "$original_url" "$ln"
+        done
+        # Auth0 domain
+        grep -nE '[a-zA-Z0-9_-]+\.auth0\.com' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '[a-zA-Z0-9_-]+\.auth0\.com' | head -1)
+            [[ -n "$secret" ]] && secret_emit "AUTH0_DOMAIN" "$secret" "$filename" "$original_url" "$ln"
+        done
+
+        # --- Okta API Token
         safe_extract '00[A-Za-z0-9_-]{40}' "OKTA_TOKEN" "$jsfile" "$original_url"
 
-        # --- Generic API keys (context-gated)
-        grep -nE '(api[_-]?key|apikey)[[:space:]]*[:=][[:space:]]*"[A-Za-z0-9_-]{20,}"' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+        # --- OAuth Client Secret
+        grep -nE '(oauth[_-]?client[_-]?secret|OAUTH_CLIENT_SECRET|client_secret)[[:space:]]*[:=][[:space:]]*"[A-Za-z0-9_-]{20,}"' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
             local ln="${raw%%:*}"
             local secret
             secret=$(echo "${raw#*:}" | grep -oE '"[A-Za-z0-9_-]{20,}"' | head -1 | tr -d '"')
             local ctx
             ctx=$(sed -n "$((${ln:-1} > 2 ? ${ln:-1}-2 : 1)),$((${ln:-1}+2))p" "$jsfile" 2>/dev/null | tr '\n' ' ')
-            [[ -n "$secret" ]] && secret_emit "GENERIC_API_KEY" "$secret" "$filename" "$original_url" "$ln" "$ctx"
+            [[ -n "$secret" ]] && secret_emit "OAUTH_CLIENT_SECRET" "$secret" "$filename" "$original_url" "$ln" "$ctx"
         done
 
-        # --- Endpoints
+        # --- Mapbox Token
+        safe_extract 'pk\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' "MAPBOX_TOKEN" "$jsfile" "$original_url"
+
+        # =====================================================================
+        # MONITORING / ANALYTICS
+        # =====================================================================
+
+        # --- Sentry DSN
+        safe_extract 'https://[a-f0-9]{32}@(o[0-9]+\.)?ingest\.sentry\.io/[0-9]+' "SENTRY_DSN" "$jsfile" "$original_url"
+
+        # --- Datadog API Key
+        grep -nE '(datadog[_-]?api[_-]?key|DD_API_KEY|ddApiKey)[^A-Za-z0-9]*[a-f0-9]{32}' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '[a-f0-9]{32}' | tail -1)
+            [[ -n "$secret" ]] && secret_emit "DATADOG_API_KEY" "$secret" "$filename" "$original_url" "$ln"
+        done
+
+        # --- New Relic License Key
+        grep -nE '(new[_-]?relic[_-]?license[_-]?key|NEW_RELIC_LICENSE_KEY|newRelicKey)[^A-Za-z0-9]*[A-Za-z0-9]{40}' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '[A-Za-z0-9]{40}' | tail -1)
+            [[ -n "$secret" ]] && secret_emit "NEW_RELIC_LICENSE_KEY" "$secret" "$filename" "$original_url" "$ln"
+        done
+        # New Relic ingest API key (NRII- prefix)
+        safe_extract 'NRII-[A-Za-z0-9_-]{36,}' "NEW_RELIC_KEY" "$jsfile" "$original_url"
+
+        # --- Amplitude API Key
+        grep -nE '(amplitude[_-]?api[_-]?key|AMPLITUDE_API_KEY|amplitudeApiKey)[^A-Za-z0-9]*[a-f0-9]{32}' "$jsfile" 2>/dev/null | while IFS= read -r raw; do
+            local ln="${raw%%:*}"
+            local secret
+            secret=$(echo "${raw#*:}" | grep -oE '[a-f0-9]{32}' | tail -1)
+            [[ -n "$secret" ]] && secret_emit "AMPLITUDE_API_KEY" "$secret" "$filename" "$original_url" "$ln"
+        done
+
+        # =====================================================================
+        # ENDPOINTS + SOURCE MAPS
+        # =====================================================================
+
         extract_endpoints "$jsfile" >> "${RESULTS_DIR}/endpoints/discovered_paths.txt" 2>/dev/null || true
 
-        # --- Source map references
         if grep -q "sourceMappingURL=" "$jsfile" 2>/dev/null; then
             local map_ref
             map_ref=$(grep -oE "sourceMappingURL=[^[:space:]]+" "$jsfile" 2>/dev/null | head -1 | sed 's/sourceMappingURL=//')
@@ -931,7 +1417,10 @@ analyze_enhanced_secrets() {
             fi
         fi
 
-        # --- Custom patterns
+        # =====================================================================
+        # CUSTOM PATTERNS
+        # =====================================================================
+
         if [[ -f "$CUSTOM_REGEX_FILE" && -s "$CUSTOM_REGEX_FILE" ]]; then
             while IFS='|' read -r pname pregex _pdesc; do
                 [[ -z "$pname" || -z "$pregex" ]] && continue
@@ -947,8 +1436,10 @@ analyze_enhanced_secrets() {
     if [[ -s "$SECRETS_TEMP" ]]; then
         sort -t'|' -k2,2 -u "$SECRETS_TEMP" > "${RESULTS_DIR}/findings/secrets.txt"
         local raw_count dedup_count
-        raw_count=$(wc -l < "$SECRETS_TEMP" || echo 0)
-        dedup_count=$(wc -l < "${RESULTS_DIR}/findings/secrets.txt" || echo 0)
+        raw_count=$(wc -l < "$SECRETS_TEMP" 2>/dev/null | tr -d '[:space:]')
+        raw_count="${raw_count:-0}"
+        dedup_count=$(wc -l < "${RESULTS_DIR}/findings/secrets.txt" 2>/dev/null | tr -d '[:space:]')
+        dedup_count="${dedup_count:-0}"
         ok "$dedup_count unique findings ($((raw_count - dedup_count)) duplicates removed)"
     else
         touch "${RESULTS_DIR}/findings/secrets.txt"
@@ -960,7 +1451,8 @@ analyze_enhanced_secrets() {
     if [[ -f "${RESULTS_DIR}/endpoints/discovered_paths.txt" ]]; then
         sort -u "${RESULTS_DIR}/endpoints/discovered_paths.txt" -o "${RESULTS_DIR}/endpoints/discovered_paths.txt"
         local ep_count
-        ep_count=$(wc -l < "${RESULTS_DIR}/endpoints/discovered_paths.txt" || echo 0)
+        ep_count=$(wc -l < "${RESULTS_DIR}/endpoints/discovered_paths.txt" 2>/dev/null | tr -d '[:space:]')
+        ep_count="${ep_count:-0}"
         ok "$ep_count unique endpoints discovered"
     fi
 }
@@ -985,7 +1477,7 @@ probe_endpoints() {
 
     > "${RESULTS_DIR}/endpoints/probe_results.txt"
 
-    head -60 "${RESULTS_DIR}/endpoints/discovered_paths.txt" | while IFS= read -r path; do
+    head -100 "${RESULTS_DIR}/endpoints/discovered_paths.txt" | while IFS= read -r path; do
         [[ -z "$path" ]] && continue
         local full_url
         case "$path" in
@@ -1008,21 +1500,22 @@ probe_endpoints() {
         head100=$(head -c 100 "$resp_file" 2>/dev/null || true)
         echo "$head100" | grep -qiE '<!DOCTYPE|<html' && continue
 
-        # Scan response body
+        # Scan response body for secrets
         local orig_url="${full_url} [response]"
-        local filename
-        filename=$(basename "$resp_file")
-        grep -nE 'AKIA[0-9A-Z]{16}|(sk|pk)_live_[0-9a-zA-Z]{24,}|gh[poshru]_[A-Za-z0-9_]{30,}|xox[baprs]-[0-9A-Za-z-]{10,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' \
+        local rfilename
+        rfilename=$(basename "$resp_file")
+        grep -nE 'AKIA[0-9A-Z]{16}|(sk|pk|rk)_live_[0-9a-zA-Z]{24,}|gh[poshru]_[A-Za-z0-9_]{30,}|xox[baprs]-[0-9A-Za-z-]{10,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|AIza[0-9A-Za-z_-]{35}|SG\.[A-Za-z0-9_.+-]{60,}' \
             "$resp_file" 2>/dev/null | while IFS= read -r raw; do
             local ln="${raw%%:*}"
             local secret
             secret=$(echo "${raw#*:}" | grep -oE '[A-Za-z0-9_/+=.-]{20,}' | head -1)
-            [[ -n "$secret" ]] && secret_emit "ENDPOINT_LEAK" "$secret" "$filename" "$orig_url" "$ln"
+            [[ -n "$secret" ]] && secret_emit "ENDPOINT_LEAK" "$secret" "$rfilename" "$orig_url" "$ln"
         done
     done
 
     local probe_count
-    probe_count=$(wc -l < "${RESULTS_DIR}/endpoints/probe_results.txt" 2>/dev/null || echo 0)
+    probe_count=$(wc -l < "${RESULTS_DIR}/endpoints/probe_results.txt" 2>/dev/null | tr -d '[:space:]')
+    probe_count="${probe_count:-0}"
     ok "Probed $probe_count endpoints"
 }
 
@@ -1053,6 +1546,15 @@ validate_credentials() {
                     warn "[INVALID] GitHub token"
                 fi
                 ;;
+            GITLAB_TOKEN)
+                local r
+                r=$(do_curl -s "https://gitlab.com/api/v4/user" -H "PRIVATE-TOKEN: $secret" 2>/dev/null | head -c 200 || true)
+                if echo "$r" | grep -q '"id"'; then
+                    ok "${GREEN}[LIVE]${NC} GitLab token valid"
+                else
+                    warn "[INVALID] GitLab token"
+                fi
+                ;;
             STRIPE_LIVE_KEY)
                 local r
                 r=$(do_curl -s "https://api.stripe.com/v1/account" -u "${secret}:" 2>/dev/null | head -c 200 || true)
@@ -1069,6 +1571,89 @@ validate_credentials() {
                     ok "${GREEN}[LIVE]${NC} OpenAI key valid"
                 else
                     warn "[INVALID] OpenAI key"
+                fi
+                ;;
+            ANTHROPIC_KEY)
+                local r
+                r=$(do_curl -s "https://api.anthropic.com/v1/models" \
+                    -H "x-api-key: $secret" \
+                    -H "anthropic-version: 2023-06-01" 2>/dev/null | head -c 200 || true)
+                if echo "$r" | grep -q '"id"'; then
+                    ok "${GREEN}[LIVE]${NC} Anthropic key valid"
+                else
+                    warn "[INVALID] Anthropic key"
+                fi
+                ;;
+            HUGGINGFACE_TOKEN)
+                local r
+                r=$(do_curl -s "https://huggingface.co/api/whoami-v2" -H "Authorization: Bearer $secret" 2>/dev/null | head -c 200 || true)
+                if echo "$r" | grep -q '"name"'; then
+                    ok "${GREEN}[LIVE]${NC} HuggingFace token valid"
+                else
+                    warn "[INVALID] HuggingFace token"
+                fi
+                ;;
+            SLACK_TOKEN)
+                local r
+                r=$(do_curl -s "https://slack.com/api/auth.test" -H "Authorization: Bearer $secret" 2>/dev/null | head -c 200 || true)
+                if echo "$r" | grep -q '"ok":true'; then
+                    ok "${GREEN}[LIVE]${NC} Slack token valid"
+                else
+                    warn "[INVALID] Slack token"
+                fi
+                ;;
+            SENDGRID_KEY)
+                local r
+                r=$(do_curl -s "https://api.sendgrid.com/v3/user/account" -H "Authorization: Bearer $secret" 2>/dev/null | head -c 200 || true)
+                if echo "$r" | grep -q '"username"'; then
+                    ok "${GREEN}[LIVE]${NC} SendGrid key valid"
+                else
+                    warn "[INVALID] SendGrid key"
+                fi
+                ;;
+            DATADOG_API_KEY)
+                local r
+                r=$(do_curl -s "https://api.datadoghq.com/api/v1/validate" -H "DD-API-KEY: $secret" 2>/dev/null | head -c 200 || true)
+                if echo "$r" | grep -q '"valid":true'; then
+                    ok "${GREEN}[LIVE]${NC} Datadog API key valid"
+                else
+                    warn "[INVALID] Datadog API key"
+                fi
+                ;;
+            NPM_TOKEN)
+                local r
+                r=$(do_curl -s "https://registry.npmjs.org/-/whoami" -H "Authorization: Bearer $secret" 2>/dev/null | head -c 200 || true)
+                if echo "$r" | grep -q '"username"'; then
+                    ok "${GREEN}[LIVE]${NC} npm token valid"
+                else
+                    warn "[INVALID] npm token"
+                fi
+                ;;
+            DIGITALOCEAN_TOKEN)
+                local r
+                r=$(do_curl -s "https://api.digitalocean.com/v2/account" -H "Authorization: Bearer $secret" 2>/dev/null | head -c 200 || true)
+                if echo "$r" | grep -q '"account"'; then
+                    ok "${GREEN}[LIVE]${NC} DigitalOcean token valid"
+                else
+                    warn "[INVALID] DigitalOcean token"
+                fi
+                ;;
+            SHOPIFY_ADMIN_TOKEN)
+                local r
+                r=$(do_curl -s "https://${CLEAN_DOMAIN}/admin/api/2023-04/shop.json" -H "X-Shopify-Access-Token: $secret" 2>/dev/null | head -c 200 || true)
+                if echo "$r" | grep -q '"shop"'; then
+                    ok "${GREEN}[LIVE]${NC} Shopify token valid"
+                else
+                    warn "[INVALID] Shopify token"
+                fi
+                ;;
+            MAPBOX_TOKEN)
+                local r
+                r=$(do_curl -s "https://api.mapbox.com/tokens/v2?access_token=${secret}" 2>/dev/null | head -c 200 || true)
+                if echo "$r" | grep -q '"token"'; then
+                    ok "${GREEN}[LIVE]${NC} Mapbox token valid"
+                else
+                    warn "[INVALID] Mapbox token"
                 fi
                 ;;
         esac
@@ -1101,7 +1686,7 @@ try:
             }}],
             "partialFingerprints": {"secretHash": secret[:16]}
         })
-except Exception as e:
+except Exception:
     pass
 
 sarif = {
@@ -1153,7 +1738,7 @@ rows = '\n'.join('''<tr>
 <td>{}</td>
 <td><code>{}{}</code></td>
 <td>{}</td>
-<td>{}</td>
+<td><a href="{}" target="_blank" style="color:#4a8fd4">{}</a></td>
 <td>{}</td>
 </tr>'''.format(
     rc(f[5] if len(f) > 5 else ''),
@@ -1163,6 +1748,7 @@ rows = '\n'.join('''<tr>
     '...' if len(f[1]) > 60 else '',
     h.escape(f[2]),
     h.escape(f[3][:80]),
+    h.escape(f[3][:50]) + ('...' if len(f[3]) > 50 else ''),
     h.escape(f[4])
 ) for f in findings)
 
@@ -1179,12 +1765,19 @@ body{{background:#0D0F16;color:#C8C6D8;font-family:-apple-system,BlinkMacSystemF
 .stat:last-child{{border-right:none}}
 .stat-n{{font-size:32px;font-weight:700;margin-bottom:4px}}
 .stat-l{{font-size:11px;color:#3d4060;text-transform:uppercase;letter-spacing:.06em}}
+.filter-bar{{padding:12px 16px;background:#0a0c12;border-bottom:1px solid #1a1d2a;display:flex;gap:8px}}
+.filter-bar input{{background:#1a1d2a;border:1px solid #2a2d3a;color:#C8C6D8;padding:6px 10px;border-radius:4px;font-size:12px;flex:1}}
+.filter-bar select{{background:#1a1d2a;border:1px solid #2a2d3a;color:#C8C6D8;padding:6px 8px;border-radius:4px;font-size:12px}}
 table{{width:100%;border-collapse:collapse;font-size:12px}}
-th{{background:#08000A;padding:10px 14px;text-align:left;color:#555870;font-weight:600;border-bottom:1px solid #1a1d2a;font-size:10px;text-transform:uppercase}}
+th{{background:#08000A;padding:10px 14px;text-align:left;color:#555870;font-weight:600;border-bottom:1px solid #1a1d2a;font-size:10px;text-transform:uppercase;cursor:pointer;user-select:none}}
+th:hover{{color:#C8C6D8}}
 td{{padding:9px 14px;border-bottom:1px solid #1a1d2a;vertical-align:top}}
 tr:hover td{{background:#0f1019}}
 code{{font-family:monospace;background:#1a1d2a;padding:2px 6px;border-radius:3px;font-size:11px;color:#CC0000}}
+a{{color:#4a8fd4;text-decoration:none}}
+a:hover{{text-decoration:underline}}
 .footer{{padding:16px 32px;color:#2e3150;font-size:11px;border-top:1px solid #1a1d2a}}
+.hidden{{display:none}}
 </style></head><body>
 <div class="hdr">
 <h1>JSHawk Security Report</h1>
@@ -1196,9 +1789,46 @@ code{{font-family:monospace;background:#1a1d2a;padding:2px 6px;border-radius:3px
 <div class="stat"><div class="stat-n" style="color:#4a8fd4">{med}</div><div class="stat-l">Medium</div></div>
 <div class="stat"><div class="stat-n" style="color:#8b7fe8">{total}</div><div class="stat-l">Total</div></div>
 </div>
-<table><thead><tr><th>Risk</th><th>Type</th><th>Secret</th><th>File</th><th>Source URL</th><th>Line</th></tr></thead>
-<tbody>{rows}</tbody></table>
-<div class="footer">JSHawk v{ver} -- github.com/Mah3Sec/JSHawk -- Authorized testing only</div>
+<div class="filter-bar">
+  <input type="text" id="searchBox" placeholder="Filter by type, secret, file..." oninput="filterTable()">
+  <select id="riskFilter" onchange="filterTable()">
+    <option value="">All Risks</option>
+    <option value="critical">Critical</option>
+    <option value="high">High</option>
+    <option value="medium">Medium</option>
+  </select>
+</div>
+<table id="findings"><thead><tr>
+<th onclick="sortTable(0)">Risk &#8597;</th>
+<th onclick="sortTable(1)">Type &#8597;</th>
+<th>Secret</th>
+<th onclick="sortTable(3)">File &#8597;</th>
+<th>Source URL</th>
+<th>Line</th>
+</tr></thead>
+<tbody id="tableBody">{rows}</tbody></table>
+<div class="footer">JSHawk v{ver} &mdash; github.com/Mah3Sec/JSHawk &mdash; Authorized testing only &mdash; {total} findings</div>
+<script>
+function filterTable(){{
+  var search = document.getElementById('searchBox').value.toLowerCase();
+  var risk   = document.getElementById('riskFilter').value.toLowerCase();
+  var rows   = document.getElementById('tableBody').getElementsByTagName('tr');
+  for(var i=0;i<rows.length;i++){{
+    var text = rows[i].textContent.toLowerCase();
+    var riskOk = !risk || text.indexOf(risk) > -1;
+    var searchOk = !search || text.indexOf(search) > -1;
+    rows[i].style.display = (riskOk && searchOk) ? '' : 'none';
+  }}
+}}
+function sortTable(col){{
+  var table = document.getElementById('tableBody');
+  var rows  = Array.from(table.rows);
+  rows.sort(function(a,b){{
+    return a.cells[col].textContent.localeCompare(b.cells[col].textContent);
+  }});
+  rows.forEach(function(r){{table.appendChild(r);}});
+}}
+</script>
 </body></html>""".format(
     dom=h.escape(domain), dt=datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
     ver=h.escape(ver), crit=crit, high=high, med=med, total=len(findings), rows=rows
@@ -1241,8 +1871,8 @@ data = {
     "summary": {
         "total": len(findings),
         "critical": sum(1 for f in findings if f["risk"] == "critical"),
-        "high": sum(1 for f in findings if f["risk"] == "high"),
-        "medium": sum(1 for f in findings if f["risk"] == "medium")
+        "high":     sum(1 for f in findings if f["risk"] == "high"),
+        "medium":   sum(1 for f in findings if f["risk"] == "medium")
     },
     "findings": findings
 }
@@ -1258,7 +1888,7 @@ generate_nuclei_templates() {
     info "Exporting Nuclei templates..."
     local n=0
     while IFS='|' read -r type secret _f url _l risk _e _c; do
-        [[ -z "$secret" || "$secret" == "PEM_BLOCK_DETECTED" ]] && continue
+        [[ -z "$secret" || "$secret" == "PEM_BLOCK_DETECTED" || "$secret" == "GCP_PRIVATE_KEY_DETECTED" ]] && continue
         local tfile="${RESULTS_DIR}/nuclei/jshawk_${type,,}_${secret:0:8}.yaml"
         cat > "$tfile" << YAML
 id: jshawk-${type,,}-exposure
@@ -1266,7 +1896,7 @@ info:
   name: ${type} Exposed in JavaScript
   author: Mah3Sec
   severity: ${risk}
-  tags: exposure,secrets,javascript
+  tags: exposure,secrets,javascript,jshawk
 http:
   - method: GET
     path:
@@ -1289,7 +1919,10 @@ generate_wordlist() {
     local wl="${RESULTS_DIR}/reports/endpoints_wordlist.txt"
     if [[ -f "${RESULTS_DIR}/endpoints/discovered_paths.txt" ]]; then
         sort -u "${RESULTS_DIR}/endpoints/discovered_paths.txt" > "$wl"
-        ok "Wordlist: $wl ($(wc -l < "$wl" || echo 0) paths)"
+        local wlc
+        wlc=$(wc -l < "$wl" 2>/dev/null | tr -d '[:space:]')
+        wlc="${wlc:-0}"
+        ok "Wordlist: $wl ($wlc paths)"
     fi
 }
 
@@ -1299,9 +1932,10 @@ display_final_summary() {
     local sf="${RESULTS_DIR}/findings/secrets.txt"
     local crit=0 high=0 med=0
     if [[ -s "$sf" ]]; then
-        crit=$(grep -c '|critical|' "$sf" 2>/dev/null || echo 0)
-        high=$(grep -c '|high|'     "$sf" 2>/dev/null || echo 0)
-        med=$(grep -c  '|medium|'   "$sf" 2>/dev/null || echo 0)
+        crit=$(grep -c '|critical|' "$sf" 2>/dev/null || true); crit="${crit//[[:space:]]/}"
+        high=$(grep -c '|high|'     "$sf" 2>/dev/null || true); high="${high//[[:space:]]/}"
+        med=$( grep -c '|medium|'   "$sf" 2>/dev/null || true); med="${med//[[:space:]]/}"
+        crit=${crit:-0}; high=${high:-0}; med=${med:-0}
     fi
     echo ""
     log "${RED}${BOLD}+================================================+${NC}"
@@ -1311,19 +1945,25 @@ display_final_summary() {
     log "  ${BOLD}Target:${NC}    $CLEAN_DOMAIN"
     log "  ${BOLD}Findings:${NC}  ${RED}$crit critical${NC}  ${ORANGE}$high high${NC}  ${YELLOW}$med medium${NC}"
     local js_count ep_count
-    js_count=$(find "${RESULTS_DIR}/js_files" -type f 2>/dev/null | wc -l || echo 0)
-    ep_count=$(wc -l < "${RESULTS_DIR}/endpoints/discovered_paths.txt" 2>/dev/null || echo 0)
+    js_count=$(find "${RESULTS_DIR}/js_files" -type f 2>/dev/null | wc -l | tr -d '[:space:]')
+    js_count="${js_count:-0}"
+    ep_count=0
+    if [[ -f "${RESULTS_DIR}/endpoints/discovered_paths.txt" ]]; then
+        ep_count=$(wc -l < "${RESULTS_DIR}/endpoints/discovered_paths.txt" 2>/dev/null | tr -d '[:space:]')
+        ep_count="${ep_count:-0}"
+    fi
     log "  ${BOLD}JS files:${NC}  $js_count scanned"
     log "  ${BOLD}Endpoints:${NC} $ep_count discovered"
     log "  ${BOLD}Results:${NC}   $RESULTS_DIR"
     echo ""
-    [[ -f "${RESULTS_DIR}/reports/jshawk.json"           ]] && log "  JSON:     ${RESULTS_DIR}/reports/jshawk.json"
-    [[ -f "${RESULTS_DIR}/reports/jshawk.sarif"          ]] && log "  SARIF:    ${RESULTS_DIR}/reports/jshawk.sarif"
-    [[ -f "${RESULTS_DIR}/reports/jshawk_report.html"    ]] && log "  HTML:     ${RESULTS_DIR}/reports/jshawk_report.html"
-    [[ -f "${RESULTS_DIR}/reports/endpoints_wordlist.txt" ]] && log "  Wordlist: ${RESULTS_DIR}/reports/endpoints_wordlist.txt"
-    [[ -d "${RESULTS_DIR}/nuclei" ]] && \
-        ls "${RESULTS_DIR}/nuclei/"*.yaml >/dev/null 2>&1 && \
-        log "  Nuclei:   ${RESULTS_DIR}/nuclei/"
+    [[ -f "${RESULTS_DIR}/scan_info.json"                  ]] && log "  Meta:     ${RESULTS_DIR}/scan_info.json"
+    [[ -f "${RESULTS_DIR}/reports/jshawk.json"             ]] && log "  JSON:     ${RESULTS_DIR}/reports/jshawk.json"
+    [[ -f "${RESULTS_DIR}/reports/jshawk.sarif"            ]] && log "  SARIF:    ${RESULTS_DIR}/reports/jshawk.sarif"
+    [[ -f "${RESULTS_DIR}/reports/jshawk_report.html"      ]] && log "  HTML:     ${RESULTS_DIR}/reports/jshawk_report.html"
+    [[ -f "${RESULTS_DIR}/reports/endpoints_wordlist.txt"  ]] && log "  Wordlist: ${RESULTS_DIR}/reports/endpoints_wordlist.txt"
+    if [[ -d "${RESULTS_DIR}/nuclei" ]]; then
+        ls "${RESULTS_DIR}/nuclei/"*.yaml >/dev/null 2>&1 && log "  Nuclei:   ${RESULTS_DIR}/nuclei/"
+    fi
     echo ""
 }
 
@@ -1348,7 +1988,6 @@ main() {
 
     local t
     for t in "${targets[@]}"; do
-        # Scope check
         if [[ -n "$SCOPE_FILE" ]]; then
             if ! grep -qF "$t" "$SCOPE_FILE" 2>/dev/null; then
                 warn "Out of scope, skipping: $t"
@@ -1371,7 +2010,8 @@ main() {
         validate_credentials
 
         local fc
-        fc=$(find "${RESULTS_DIR}/js_files" -type f 2>/dev/null | wc -l || echo 0)
+        fc=$(find "${RESULTS_DIR}/js_files" -type f 2>/dev/null | wc -l | tr -d '[:space:]')
+        fc="${fc:-0}"
         generate_json_report "$fc"
         generate_sarif
         generate_html_report
